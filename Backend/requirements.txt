@@ -1,3 +1,28 @@
+# django==5.2.5
+# djangorestframework==3.16.1
+# djangorestframework_simplejwt==5.5.0
+# django-cors-headers==4.7.0
+# django-filter==25.1.0
+# cryptography==45.0.6
+# python-dotenv==1.1.1
+# psycopg2-binary==2.9.10
+# pillow==11.3.0
+# celery==5.5.3
+# pika==1.3.2
+# django-celery-results==2.6.0
+# amqp==5.3.1
+# pytz==2025.2
+# django-redis==6.0.0
+# python-dateutil==2.9.0
+# drf-spectacular
+# drf-spectacular-sidecar
+# gunicorn==23.0.0
+# django-ckeditor-5==0.2.18
+
+
+
+
+# ─── Django core ──────────────────────────────────────────────────
 django==5.2.5
 djangorestframework==3.16.1
 djangorestframework_simplejwt==5.5.0
@@ -5,16 +30,59 @@ django-cors-headers==4.7.0
 django-filter==25.1.0
 cryptography==45.0.6
 python-dotenv==1.1.1
+
+# ─── Database ─────────────────────────────────────────────────────
 psycopg2-binary==2.9.10
+
+# ─── Image handling ───────────────────────────────────────────────
 pillow==11.3.0
+
+# ─── Celery + RabbitMQ ────────────────────────────────────────────
 celery==5.5.3
 pika==1.3.2
 django-celery-results==2.6.0
+django-celery-beat==2.7.0
 amqp==5.3.1
 pytz==2025.2
-django-redis==6.0.0
 python-dateutil==2.9.0
+
+# ─── Cache ────────────────────────────────────────────────────────
+django-redis==6.0.0
+
+# ─── API docs ─────────────────────────────────────────────────────
 drf-spectacular
 drf-spectacular-sidecar
-gunicorn==23.0.0
+
+# ─── CKEditor ─────────────────────────────────────────────────────
 django-ckeditor-5==0.2.18
+
+# ─── Production server ────────────────────────────────────────────
+gunicorn==23.0.0
+
+# ═════════════════════════════════════════════════════════════════
+#  NEW — AI Resume Screener (RAG) packages
+# ═════════════════════════════════════════════════════════════════
+
+# LLM — Groq (fast inference, free tier available)
+groq>=0.9.0
+tenacity>=8.3.0          # retry decorator used in all agents
+
+# LangChain + LangGraph (agent orchestration)
+langchain>=0.2.5
+langchain-groq>=0.1.6    # Groq integration for LangChain
+langgraph>=0.1.0         # LangGraph agent framework
+
+# Web search (Tavily)
+tavily-python>=0.3.3
+
+# Embeddings — sentence-transformers (runs locally, no API key needed)
+sentence-transformers>=3.0.0
+torch>=2.0.0             # required by sentence-transformers
+
+# Vector store (ChromaDB)
+chromadb>=0.5.3
+
+# Resume file parsing
+pdfplumber>=0.11.0       # primary PDF text extractor
+PyMuPDF>=1.24.0          # fallback PDF extractor (imported as fitz)
+python-docx>=1.1.0       # DOCX parser
