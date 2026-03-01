@@ -372,7 +372,6 @@ INSTALLED_APPS = [
     'django_ckeditor_5',
 
     # Existing apps
-    'apps.myapp',
     'apps.notification',
     'apps.images',
 

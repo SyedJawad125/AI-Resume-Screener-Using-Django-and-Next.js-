@@ -6,13 +6,13 @@ from utils.reusable_functions import (create_response, get_first_error, get_toke
 from rest_framework import status
 from utils.response_messages import *
 from rest_framework.permissions import AllowAny, IsAuthenticated
-from .serializers import (ChangePasswordSerializer, LoginSerializer, LoginUserSerializer, EmptySerializer, LogoutSerializer,
+from .serializers import (ChangePasswordSerializer, CompanyDetailSerializer, CompanyListSerializer, CompanyWriteSerializer, LoginSerializer, LoginUserSerializer, EmptySerializer, LogoutSerializer,
                           SetPasswordSerializer, PermissionSerializer, EmployeeSerializer,
                           UserSerializer, RoleSerializer, RoleListingSerializer, VerifyOTPSerializer,
                           ResetPasswordSimpleSerializer)
 from rest_framework_simplejwt.tokens import RefreshToken, AccessToken
 from config.settings import (SIMPLE_JWT, FRONTEND_BASE_URL, PASSWORD_RESET_VALIDITY, FRONTEND_EMAIL_LINK)
-from .models import UserToken, User
+from .models import Company, UserToken, User
 from django.utils import timezone
 from utils.helpers import generate_token
 from apps.notification.tasks import send_email
@@ -22,7 +22,7 @@ from utils.base_api import BaseView
 from collections import defaultdict
 from utils.decorator import permission_required
 from utils.permission_enums import *
-from .filters import (EmployeeFilter, RoleFilter)
+from .filters import (CompanyFilter, EmployeeFilter, RoleFilter)
 
 
 class LoginView(APIView):
@@ -897,6 +897,105 @@ class AccountActivateView(BaseView):
             else:
                 return Response(create_response(get_first_error(serialized_data.errors)),
                                 status=status.HTTP_400_BAD_REQUEST)
+        except Exception as e:
+            print(str(e))
+            return Response(create_response(str(e)), status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+        
+
+
+class CompanyView(BaseView):
+    """
+    GET    /v1/company/         → list all companies (superuser) or own company
+    POST   /v1/company/         → create a new company
+    PATCH  /v1/company/?id=     → update a company
+    DELETE /v1/company/?id=     → soft-delete a company
+    """
+    permission_classes = (IsAuthenticated,)
+    serializer_class   = CompanyWriteSerializer
+    filterset_class    = CompanyFilter
+
+    def get_queryset(self):
+        user = self.request.user
+        qs   = Company.objects.filter(deleted=False)
+        # Superuser sees all; everyone else only sees their own company
+        if not user.is_superuser:
+            if user.company:
+                qs = qs.filter(id=user.company_id)
+            else:
+                qs = qs.none()
+        return qs
+
+    def post(self, request):
+        try:
+            serializer = CompanyWriteSerializer(data=request.data, context={'request': request})
+            if serializer.is_valid():
+                company = serializer.save()
+                resp    = CompanyDetailSerializer(company).data
+                return Response(create_response(SUCCESSFUL, resp), status=status.HTTP_201_CREATED)
+            return Response(create_response(get_first_error(serializer.errors)), status=status.HTTP_400_BAD_REQUEST)
+        except Exception as e:
+            print(str(e))
+            return Response(create_response(str(e)), status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+    def get(self, request):
+        try:
+            queryset = self.get_queryset()
+
+            # Apply filters
+            filterset = self.filterset_class(request.query_params, queryset=queryset)
+            queryset  = filterset.qs if filterset.is_valid() else queryset
+
+            # Single record
+            if request.query_params.get('id'):
+                instance = queryset.filter(id=request.query_params['id']).first()
+                if not instance:
+                    return Response(create_response(NOT_FOUND), status=status.HTTP_404_NOT_FOUND)
+                return Response(
+                    create_response(SUCCESSFUL, CompanyDetailSerializer(instance).data),
+                    status=status.HTTP_200_OK,
+                )
+
+            # List
+            serialized = CompanyListSerializer(queryset, many=True).data
+            return Response(create_response(SUCCESSFUL, serialized, queryset.count()), status=status.HTTP_200_OK)
+
+        except Exception as e:
+            print(str(e))
+            return Response(create_response(str(e)), status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+    def patch(self, request):
+        try:
+            if not request.query_params.get('id'):
+                return Response(create_response(ID_NOT_PROVIDED), status=status.HTTP_400_BAD_REQUEST)
+            instance = self.get_queryset().filter(id=request.query_params['id']).first()
+            if not instance:
+                return Response(create_response(NOT_FOUND), status=status.HTTP_404_NOT_FOUND)
+            serializer = CompanyWriteSerializer(instance, data=request.data, partial=True, context={'request': request})
+            if serializer.is_valid():
+                company = serializer.save()
+                return Response(create_response(SUCCESSFUL, CompanyDetailSerializer(company).data), status=status.HTTP_200_OK)
+            return Response(create_response(get_first_error(serializer.errors)), status=status.HTTP_400_BAD_REQUEST)
+        except Exception as e:
+            print(str(e))
+            return Response(create_response(str(e)), status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+    def delete(self, request):
+        try:
+            if not request.query_params.get('id'):
+                return Response(create_response(ID_NOT_PROVIDED), status=status.HTTP_400_BAD_REQUEST)
+            instance = self.get_queryset().filter(id=request.query_params['id']).first()
+            if not instance:
+                return Response(create_response(NOT_FOUND), status=status.HTTP_404_NOT_FOUND)
+            # Check no active users are linked
+            if instance.company_users.filter(deleted=False).exists():
+                return Response(
+                    create_response('Cannot delete company with active users.'),
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+            instance.deleted     = True
+            instance.is_active   = False
+            instance.save()
+            return Response(create_response(SUCCESSFUL), status=status.HTTP_200_OK)
         except Exception as e:
             print(str(e))
             return Response(create_response(str(e)), status=status.HTTP_500_INTERNAL_SERVER_ERROR)

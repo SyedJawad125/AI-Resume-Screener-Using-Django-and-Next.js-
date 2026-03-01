@@ -1,6 +1,6 @@
 import django_filters as filters
 from django.db.models import Q
-from .models import Employee, Role
+from .models import Company, Employee, Role
 
 
 class EmployeeFilter(filters.FilterSet):
@@ -35,4 +35,24 @@ class RoleFilter(filters.FilterSet):
         return queryset.filter(
             Q(name__icontains=value) |
             Q(code_name__icontains=value)
+        )
+    
+
+
+class CompanyFilter(filters.FilterSet):
+    search            = filters.CharFilter(method='filter_search')
+    subscription_plan = filters.CharFilter(field_name='subscription_plan', lookup_expr='iexact')
+    is_active         = filters.BooleanFilter(field_name='is_active')
+    date_from         = filters.DateFilter(field_name='created_at', lookup_expr='gte')
+    date_to           = filters.DateFilter(field_name='created_at', lookup_expr='lte')
+
+    class Meta:
+        model  = Company
+        fields = ['subscription_plan', 'is_active']
+
+    def filter_search(self, queryset, name, value):
+        return queryset.filter(
+            Q(name__icontains=value) |
+            Q(email__icontains=value) |
+            Q(slug__icontains=value)
         )

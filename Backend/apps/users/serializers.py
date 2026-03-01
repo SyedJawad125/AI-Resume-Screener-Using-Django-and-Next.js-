@@ -10,7 +10,7 @@ from django.db import transaction
 from utils.enums import *
 from utils.validators import clean_and_validate_mobile
 from django.utils import timezone
-from .models import User, Employee, Role, Permission
+from .models import Company, User, Employee, Role, Permission
 from config.settings import (MAX_LOGIN_ATTEMPTS, SIMPLE_JWT, PASSWORD_MIN_LENGTH)
 from django.contrib.auth.hashers import check_password
 from .utils import validate_password
@@ -326,3 +326,65 @@ class RoleSerializer(serializers.ModelSerializer):
         data['updated_by'] = instance.updated_by.full_name if instance.updated_by else None
         data['permissions'] = PermissionListingSerializer(instance.permissions.all(), many=True).data if data['permissions'] else []
         return data
+    
+
+
+# ─────────────────────────────────────────────────────────────────
+#  Company Serializers
+# ─────────────────────────────────────────────────────────────────
+
+class CompanyListSerializer(serializers.ModelSerializer):
+    """Lightweight serializer — used in dropdowns and list views."""
+    user_count = serializers.SerializerMethodField()
+
+    class Meta:
+        model  = Company
+        fields = ['id', 'name', 'slug', 'email', 'subscription_plan',
+                  'is_active', 'user_count', 'created_at']
+
+    def get_user_count(self, obj):
+        return obj.company_users.filter(deleted=False).count()
+
+
+class CompanyDetailSerializer(serializers.ModelSerializer):
+    """Full detail serializer — used in retrieve and update views."""
+    user_count = serializers.SerializerMethodField()
+
+    class Meta:
+        model  = Company
+        fields = [
+            'id', 'name', 'slug', 'email', 'phone', 'address',
+            'website', 'logo', 'description',
+            'subscription_plan', 'monthly_screening_limit',
+            'is_active', 'user_count', 'created_at', 'updated_at',
+        ]
+        read_only_fields = ['id', 'slug', 'created_at', 'updated_at']
+
+    def get_user_count(self, obj):
+        return obj.company_users.filter(deleted=False).count()
+
+
+class CompanyWriteSerializer(serializers.ModelSerializer):
+    """Create / Update serializer."""
+    class Meta:
+        model  = Company
+        fields = [
+            'name', 'email', 'phone', 'address', 'website',
+            'logo', 'description', 'subscription_plan',
+            'monthly_screening_limit', 'is_active',
+        ]
+
+    def validate_name(self, value):
+        qs = Company.objects.filter(name__iexact=value, deleted=False)
+        if self.instance:
+            qs = qs.exclude(id=self.instance.id)
+        if qs.exists():
+            raise serializers.ValidationError('A company with this name already exists.')
+        return value.strip().title()
+
+
+class CompanyMinimalSerializer(serializers.ModelSerializer):
+    """Used as a nested field inside UserListSerializer etc."""
+    class Meta:
+        model  = Company
+        fields = ['id', 'name', 'slug', 'subscription_plan']
