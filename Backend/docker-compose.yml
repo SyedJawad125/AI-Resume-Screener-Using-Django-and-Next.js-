@@ -121,7 +121,7 @@ services:
   # ── Adminer  (DB UI) ───────────────────────────────────────────
   adminer:
     image: adminer
-    container_name: adminer_template
+    container_name: adminer_AI_Resume_Screener
     restart: always
     ports:
       - "8080:8080"
