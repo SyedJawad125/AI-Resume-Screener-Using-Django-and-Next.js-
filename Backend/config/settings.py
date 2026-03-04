@@ -493,7 +493,7 @@ REST_FRAMEWORK = {
     'PAGE_SIZE': 20,
     'DATETIME_FORMAT': "%Y-%m-%d %H:%M:%S",
     'DEFAULT_SCHEMA_CLASS': 'drf_spectacular.openapi.AutoSchema',
-    'EXCEPTION_HANDLER': 'core.utils.exception_handler.custom_exception_handler',
+    'EXCEPTION_HANDLER': 'apps.core.utils.exception_handler.custom_exception_handler',
 }
 
 

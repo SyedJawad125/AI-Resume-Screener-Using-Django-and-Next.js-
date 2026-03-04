@@ -95,3 +95,30 @@ CREATE_IMAGE_CATEGORY = 'create_image_category'
 READ_IMAGE_CATEGORY = 'read_image_category'
 UPDATE_IMAGE_CATEGORY = 'update_image_category'
 DELETE_IMAGE_CATEGORY = 'delete_image_category'
+
+# ─── JOB ─────────────────────────────────────
+SHOW_JOB    = "show_job"
+CREATE_JOB  = "create_job"
+READ_JOB    = "read_job"
+UPDATE_JOB  = "update_job"
+DELETE_JOB  = "delete_job"
+ANALYZE_JOB = "analyze_job"
+STATS_JOB   = "stats_job"
+
+# ─────────────────────────────────────────────
+#  RESUME
+# ─────────────────────────────────────────────
+SHOW_RESUME   = "show_resume"
+CREATE_RESUME = "create_resume"
+READ_RESUME   = "read_resume"
+UPDATE_RESUME = "update_resume"
+DELETE_RESUME = "delete_resume"
+
+# ─────────────────────────────────────────────
+#  SCREENING
+# ─────────────────────────────────────────────
+SHOW_SCREENING   = "show_screening"
+CREATE_SCREENING = "create_screening"
+READ_SCREENING   = "read_screening"
+UPDATE_SCREENING = "update_screening"
+DELETE_SCREENING = "delete_screening"

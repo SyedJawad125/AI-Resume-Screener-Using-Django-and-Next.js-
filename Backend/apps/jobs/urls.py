@@ -1,14 +1,25 @@
 from django.urls import path
 from .views import (
-    JobDescriptionListCreateView,
-    JobDescriptionDetailView,
-    analyze_job_view,
-    job_stats_view,
+    JobView,
+    JobListView,
+    JobToggleView,
+    JobAnalyzeView,
+    JobStatsView,
 )
 
 urlpatterns = [
-    path('',                    JobDescriptionListCreateView.as_view(), name='job-list-create'),
-    path('stats/',              job_stats_view,                         name='job-stats'),
-    path('<uuid:id>/',          JobDescriptionDetailView.as_view(),     name='job-detail'),
-    path('<uuid:id>/analyze/',  analyze_job_view,                       name='job-analyze'),
+    # ─── Main CRUD (GET list, GET detail ?id=, POST, PATCH ?id=, DELETE ?id=)
+    path('v1/job/',          JobView.as_view(),       name='job'),
+
+    # ─── Lightweight list for dropdowns/cards
+    path('v1/job/list/',     JobListView.as_view(),    name='job-list'),
+
+    # ─── Toggle status  PATCH ?id=<uuid>  body: {"status": "active"}
+    path('v1/job/toggle/',   JobToggleView.as_view(),  name='job-toggle'),
+
+    # ─── Trigger AI analysis  POST ?id=<uuid>
+    path('v1/job/analyze/',  JobAnalyzeView.as_view(), name='job-analyze'),
+
+    # ─── Company job statistics  GET
+    path('v1/job/stats/',    JobStatsView.as_view(),   name='job-stats'),
 ]

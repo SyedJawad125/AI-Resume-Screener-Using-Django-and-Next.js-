@@ -127,7 +127,46 @@ permissions = [
             description='User can update Image Category'),
     Permission(name='Delete Image Category', code_name='delete_image_category', module_name='Image Category', module_label='Image Category Management',
             description='User can delete Image Category'),
-]
+
+
+   # ---------- Jobs ----------
+        Permission(name='Create Job', code_name='create_job', module_name='Job', module_label='Job Management',
+                description='User can create a job'),
+        Permission(name='Read Job', code_name='read_job', module_name='Job', module_label='Job Management',
+                description='User can view a job'),
+        Permission(name='Update Job', code_name='update_job', module_name='Job', module_label='Job Management',
+                description='User can update a job'),
+        Permission(name='Delete Job', code_name='delete_job', module_name='Job', module_label='Job Management',
+                description='User can delete a job'),
+        Permission(name='Show Job', code_name='show_job', module_name='Job', module_label='Job Management',
+                description='User can list all jobs'),
+        Permission(name='Toggle Job', code_name='toggle_job', module_name='Job', module_label='Job Management',
+                description='User can activate/deactivate a job'),
+
+        # ---------- Resumes ----------
+        Permission(name='Create Resume', code_name='create_resume', module_name='Resume', module_label='Resume Management',
+                description='User can upload a resume'),
+        Permission(name='Read Resume', code_name='read_resume', module_name='Resume', module_label='Resume Management',
+                description='User can view a resume'),
+        Permission(name='Update Resume', code_name='update_resume', module_name='Resume', module_label='Resume Management',
+                description='User can update a resume'),
+        Permission(name='Delete Resume', code_name='delete_resume', module_name='Resume', module_label='Resume Management',
+                description='User can delete a resume'),
+        Permission(name='Show Resume', code_name='show_resume', module_name='Resume', module_label='Resume Management',
+                description='User can list all resumes'),
+
+        # ---------- Screening ----------
+        Permission(name='Create Screening', code_name='create_screening', module_name='Screening', module_label='Screening Management',
+                description='User can create a screening'),
+        Permission(name='Read Screening', code_name='read_screening', module_name='Screening', module_label='Screening Management',
+                description='User can view a screening'),
+        Permission(name='Update Screening', code_name='update_screening', module_name='Screening', module_label='Screening Management',
+                description='User can update a screening'),
+        Permission(name='Delete Screening', code_name='delete_screening', module_name='Screening', module_label='Screening Management',
+                description='User can delete a screening'),
+        Permission(name='Show Screening', code_name='show_screening', module_name='Screening', module_label='Screening Management',
+                description='User can list all screenings'),
+        ]
 
 
 def add_permission():

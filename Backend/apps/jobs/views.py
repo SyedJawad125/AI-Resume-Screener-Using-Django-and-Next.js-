@@ -1,145 +1,226 @@
 import logging
-from rest_framework import generics, status, filters
-from rest_framework.decorators import api_view, permission_classes
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
-from django_filters.rest_framework import DjangoFilterBackend
+from rest_framework import status
 from drf_spectacular.utils import extend_schema
+
+from utils.base_api import BaseView
+from utils.reusable_functions import create_response
+from utils.response_messages import SUCCESSFUL, NOT_FOUND, ID_NOT_PROVIDED
+from utils.decorator import permission_required
+from utils.permission_enums import *
 
 from .models import JobDescription, JobStatus
 from .serializers import (
-    JobDescriptionListSerializer,
-    JobDescriptionDetailSerializer,
     JobDescriptionWriteSerializer,
+    JobDescriptionDetailSerializer,
+    JobDescriptionListSerializer,
 )
 from .filters import JobDescriptionFilter
 
 logger = logging.getLogger(__name__)
 
 
-def get_company_qs(user):
-    """Base queryset scoped to user's company."""
+def _scope_filters(user):
+    """Return extra_filters dict scoped to user's company (non-super-admin)."""
     from apps.users.models import UserRole
-    qs = JobDescription.objects.select_related('company', 'created_by').prefetch_related('skills')
     if getattr(user, 'role', None) != UserRole.SUPER_ADMIN:
-        qs = qs.filter(company=user.company)
-    return qs
+        return {'company': user.company}
+    return {}
 
 
 # ─────────────────────────────────────────────────────────
-#  List + Create
+#  Main CRUD   →   /api/jobs/v1/job/
+#  GET    ?id=<uuid>   → single detail
+#  GET                 → paginated list
+#  POST               → create
+#  PATCH  ?id=<uuid>  → partial update
+#  DELETE ?id=<uuid>  → soft delete (archive)
 # ─────────────────────────────────────────────────────────
-class JobDescriptionListCreateView(generics.ListCreateAPIView):
-    """
-    GET  /api/v1/jobs/          — list (paginated, filtered)
-    POST /api/v1/jobs/          — create new JD
-    """
-    permission_classes  = [IsAuthenticated]
-    filter_backends     = [DjangoFilterBackend, filters.SearchFilter, filters.OrderingFilter]
-    filterset_class     = JobDescriptionFilter
-    search_fields       = ['title', 'department', 'description', 'requirements']
-    ordering_fields     = ['created_at', 'title', 'screening_count', 'min_experience_years']
-    ordering            = ['-created_at']
+@extend_schema(tags=['jobs'])
+class JobView(BaseView):
+    permission_classes = (IsAuthenticated,)
+    serializer_class   = JobDescriptionWriteSerializer
+    list_serializer    = JobDescriptionListSerializer
+    filterset_class    = JobDescriptionFilter
 
-    def get_queryset(self):
-        return get_company_qs(self.request.user)
+    @extend_schema(summary='Create a job description')
+    @permission_required([CREATE_JOB])
+    def post(self, request):
+        return super().post_(request)
 
-    def get_serializer_class(self):
-        return JobDescriptionWriteSerializer if self.request.method == 'POST' else JobDescriptionListSerializer
+    @extend_schema(summary='List or retrieve job descriptions')
+    @permission_required([READ_JOB])
+    def get(self, request):
+        self.extra_filters = _scope_filters(request.user)
+        # Use detail serializer when fetching a single job by id
+        if request.query_params.get('id'):
+            self.serializer_class = JobDescriptionDetailSerializer
+        return super().get_(request)
 
-    def get_permissions(self):
-        if self.request.method == 'POST':
-            from apps.users.permissions import CanManageJobs
-            return [IsAuthenticated(), CanManageJobs()]
-        return [IsAuthenticated()]
+    @extend_schema(summary='Partial update a job description')
+    @permission_required([UPDATE_JOB])
+    def patch(self, request):
+        self.extra_filters = _scope_filters(request.user)
+        return super().patch_(request)
 
-    @extend_schema(tags=['jobs'], summary='List job descriptions')
-    def get(self, request, *args, **kwargs):
-        return super().get(request, *args, **kwargs)
+    @extend_schema(summary='Soft-delete (archive) a job description')
+    @permission_required([DELETE_JOB])
+    def delete(self, request):
+        """
+        Soft delete: sets deleted=True + status=ARCHIVED.
+        Uses ?id= query param — consistent with BaseView pattern.
+        """
+        try:
+            job_id = request.query_params.get('id')
+            if not job_id:
+                return Response(create_response(ID_NOT_PROVIDED), status=status.HTTP_400_BAD_REQUEST)
 
-    @extend_schema(tags=['jobs'], summary='Create a job description')
-    def post(self, request, *args, **kwargs):
-        return super().post(request, *args, **kwargs)
+            extra = _scope_filters(request.user)
+            instance = JobDescription.objects.filter(
+                deleted=False, id=job_id, **extra
+            ).first()
 
+            if not instance:
+                return Response(create_response(NOT_FOUND), status=status.HTTP_404_NOT_FOUND)
 
-# ─────────────────────────────────────────────────────────
-#  Retrieve + Update + Soft-delete
-# ─────────────────────────────────────────────────────────
-class JobDescriptionDetailView(generics.RetrieveUpdateDestroyAPIView):
-    """
-    GET    /api/v1/jobs/<id>/   — full detail with skills + analysis
-    PATCH  /api/v1/jobs/<id>/   — partial update
-    DELETE /api/v1/jobs/<id>/   — archive (soft delete)
-    """
-    permission_classes = [IsAuthenticated]
-    lookup_field       = 'id'
+            # Delegate to model's soft_delete helper
+            instance.soft_delete(user=request.user)
 
-    def get_queryset(self):
-        return get_company_qs(self.request.user).select_related('analysis')
+            serialized_resp = self.serializer_class(instance, context={'request': request}).data
+            return Response(create_response(SUCCESSFUL, serialized_resp), status=status.HTTP_200_OK)
 
-    def get_serializer_class(self):
-        if self.request.method in ['PUT', 'PATCH']:
-            return JobDescriptionWriteSerializer
-        return JobDescriptionDetailSerializer
-
-    def get_permissions(self):
-        if self.request.method in ['PUT', 'PATCH', 'DELETE']:
-            from apps.users.permissions import CanManageJobs
-            return [IsAuthenticated(), CanManageJobs()]
-        return [IsAuthenticated()]
-
-    def destroy(self, request, *args, **kwargs):
-        job = self.get_object()
-        job.status = JobStatus.ARCHIVED
-        job.save(update_fields=['status'])
-        return Response({'message': 'Job archived successfully.'}, status=status.HTTP_200_OK)
-
-    @extend_schema(tags=['jobs'], summary='Get job description detail')
-    def get(self, request, *args, **kwargs):
-        return super().get(request, *args, **kwargs)
-
-    @extend_schema(tags=['jobs'], summary='Update job description')
-    def patch(self, request, *args, **kwargs):
-        kwargs['partial'] = True
-        return super().update(request, *args, **kwargs)
+        except Exception as e:
+            logger.exception("JobView.delete error: %s", e)
+            return Response(create_response(str(e)), status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
 
 # ─────────────────────────────────────────────────────────
-#  Trigger AI Analysis
+#  Lightweight list   →   /api/jobs/v1/job/list/
+#  GET  (for dropdowns, cards, show_job permission)
 # ─────────────────────────────────────────────────────────
-@extend_schema(tags=['jobs'], summary='Trigger AI analysis of a job description')
-@api_view(['POST'])
-@permission_classes([IsAuthenticated])
-def analyze_job_view(request, id):
-    """
-    Triggers the JD Analyzer Agent (async Celery task).
-    Extracts skills, keywords, ideal candidate profile.
-    """
-    try:
-        job = JobDescription.objects.get(id=id, company=request.user.company)
-    except JobDescription.DoesNotExist:
-        return Response({'error': 'Job not found.'}, status=status.HTTP_404_NOT_FOUND)
+@extend_schema(tags=['jobs'])
+class JobListView(BaseView):
+    permission_classes = (IsAuthenticated,)
+    serializer_class   = JobDescriptionListSerializer
+    filterset_class    = JobDescriptionFilter
 
-    from core.tasks import analyze_job_description_task
-    task = analyze_job_description_task.delay(str(job.id))
-    return Response(
-        {'message': 'JD analysis started.', 'task_id': task.id, 'job_id': str(job.id)},
-        status=status.HTTP_202_ACCEPTED,
-    )
+    @extend_schema(summary='Lightweight job list for dropdowns / cards')
+    @permission_required([SHOW_JOB])
+    def get(self, request):
+        self.extra_filters = _scope_filters(request.user)
+        return super().get_(request)
 
 
 # ─────────────────────────────────────────────────────────
-#  Stats
+#  Toggle status   →   /api/jobs/v1/job/toggle/
+#  PATCH  ?id=<uuid>   body: {"status": "active"|"paused"|...}
 # ─────────────────────────────────────────────────────────
-@extend_schema(tags=['jobs'], summary='Job statistics for the company')
-@api_view(['GET'])
-@permission_classes([IsAuthenticated])
-def job_stats_view(request):
-    qs = JobDescription.objects.filter(company=request.user.company)
-    return Response({
-        'total':             qs.count(),
-        'active':            qs.filter(status=JobStatus.ACTIVE).count(),
-        'draft':             qs.filter(status=JobStatus.DRAFT).count(),
-        'total_screenings':  sum(qs.values_list('screening_count', flat=True)),
-        'by_status': {s: qs.filter(status=s).count() for s in JobStatus.values},
-    })
+@extend_schema(tags=['jobs'])
+class JobToggleView(BaseView):
+    permission_classes = (IsAuthenticated,)
+    serializer_class   = JobDescriptionWriteSerializer
+
+    @extend_schema(summary='Toggle job status (active / paused / draft / closed)')
+    @permission_required([UPDATE_JOB])
+    def patch(self, request):
+        try:
+            job_id = request.query_params.get('id')
+            if not job_id:
+                return Response(create_response(ID_NOT_PROVIDED), status=status.HTTP_400_BAD_REQUEST)
+
+            extra    = _scope_filters(request.user)
+            instance = JobDescription.objects.filter(deleted=False, id=job_id, **extra).first()
+            if not instance:
+                return Response(create_response(NOT_FOUND), status=status.HTTP_404_NOT_FOUND)
+
+            new_status = request.data.get('status')
+            if new_status not in JobStatus.values:
+                return Response(
+                    create_response(f"Invalid status. Choices: {', '.join(JobStatus.values)}"),
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+
+            instance.status     = new_status
+            instance.updated_by = request.user
+            instance.save(update_fields=['status', 'updated_by', 'updated_at'])
+
+            serialized_resp = self.serializer_class(instance, context={'request': request}).data
+            return Response(create_response(SUCCESSFUL, serialized_resp), status=status.HTTP_200_OK)
+
+        except Exception as e:
+            logger.exception("JobToggleView.patch error: %s", e)
+            return Response(create_response(str(e)), status=status.HTTP_400_BAD_REQUEST)
+
+
+# ─────────────────────────────────────────────────────────
+#  Trigger AI Analysis   →   /api/jobs/v1/job/analyze/
+#  POST  ?id=<uuid>
+# ─────────────────────────────────────────────────────────
+@extend_schema(tags=['jobs'])
+class JobAnalyzeView(BaseView):
+    permission_classes = (IsAuthenticated,)
+    serializer_class   = JobDescriptionWriteSerializer
+
+    @extend_schema(summary='Trigger AI analysis on a job description')
+    @permission_required([ANALYZE_JOB])
+    def post(self, request):
+        try:
+            job_id = request.query_params.get('id')
+            if not job_id:
+                return Response(create_response(ID_NOT_PROVIDED), status=status.HTTP_400_BAD_REQUEST)
+
+            instance = JobDescription.objects.filter(
+                deleted=False, id=job_id, company=request.user.company
+            ).first()
+            if not instance:
+                return Response(create_response(NOT_FOUND), status=status.HTTP_404_NOT_FOUND)
+
+            from apps.core.tasks import analyze_job_description_task
+            task = analyze_job_description_task.delay(str(instance.id))
+
+            return Response(
+                create_response(SUCCESSFUL, {
+                    'task_id': task.id,
+                    'job_id':  str(instance.id),
+                    'message': 'JD analysis started.',
+                }),
+                status=status.HTTP_202_ACCEPTED,
+            )
+
+        except Exception as e:
+            logger.exception("JobAnalyzeView.post error: %s", e)
+            return Response(create_response(str(e)), status=status.HTTP_400_BAD_REQUEST)
+
+
+# ─────────────────────────────────────────────────────────
+#  Job Stats   →   /api/jobs/v1/job/stats/
+#  GET
+# ─────────────────────────────────────────────────────────
+@extend_schema(tags=['jobs'])
+class JobStatsView(BaseView):
+    permission_classes = (IsAuthenticated,)
+    serializer_class   = JobDescriptionListSerializer   # required by BaseView
+
+    @extend_schema(summary='Job statistics for the company')
+    @permission_required([STATS_JOB])
+    def get(self, request):
+        try:
+            qs = JobDescription.objects.filter(
+                deleted=False, **_scope_filters(request.user)
+            )
+            data = {
+                'total':            qs.count(),
+                'active':           qs.filter(status=JobStatus.ACTIVE).count(),
+                'draft':            qs.filter(status=JobStatus.DRAFT).count(),
+                'paused':           qs.filter(status=JobStatus.PAUSED).count(),
+                'closed':           qs.filter(status=JobStatus.CLOSED).count(),
+                'archived':         qs.filter(status=JobStatus.ARCHIVED).count(),
+                'total_screenings': sum(qs.values_list('screening_count', flat=True)),
+                'by_status':        {s: qs.filter(status=s).count() for s in JobStatus.values},
+            }
+            return Response(create_response(SUCCESSFUL, data), status=status.HTTP_200_OK)
+
+        except Exception as e:
+            logger.exception("JobStatsView.get error: %s", e)
+            return Response(create_response(str(e)), status=status.HTTP_500_INTERNAL_SERVER_ERROR)
