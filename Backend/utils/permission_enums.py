@@ -115,12 +115,15 @@ BULK_UPLOAD_RESUME  = 'bulk_upload_resume'   # POST  /resume/bulk-upload/  + sta
 RETRY_PARSE_RESUME  = 'retry_parse_resume'   # POST  /resume/retry-parse/
 STATS_RESUME        = 'stats_resume'         # GET   /resume/stats/
 
-
-# ─────────────────────────────────────────────
-#  SCREENING
-# ─────────────────────────────────────────────
-SHOW_SCREENING   = "show_screening"
-CREATE_SCREENING = "create_screening"
-READ_SCREENING   = "read_screening"
-UPDATE_SCREENING = "update_screening"
-DELETE_SCREENING = "delete_screening"
+# ── Screening ─────────────────────────────────────────────
+SHOW_SCREENING      = 'show_screening'      # GET  /screening/v1/session/  (list)
+CREATE_SCREENING    = 'create_screening'    # POST /screening/v1/session/start/
+READ_SCREENING      = 'read_screening'      # GET  /screening/v1/session/?id=
+                                            # GET  /screening/v1/result/  or ?id=
+                                            # GET  /screening/v1/result/agent-logs/
+DELETE_SCREENING    = 'delete_screening'    # DELETE /screening/v1/session/?id=
+DECIDE_SCREENING    = 'decide_screening'    # PATCH /screening/v1/result/decision/
+COMPARE_SCREENING   = 'compare_screening'   # POST /screening/v1/compare/
+ANALYTICS_SCREENING = 'analytics_screening' # GET  /screening/v1/analytics/
+STATS_SCREENING     = 'stats_screening'     # GET  /screening/v1/stats/
+SHOW_ALL_SCREENINGS = 'show_all_screenings' # bypass initiated_by scope filter (manager/admin role)
