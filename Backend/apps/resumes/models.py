@@ -1,8 +1,6 @@
 import uuid
 from django.db import models
-from django.contrib.auth import get_user_model
-
-User = get_user_model()
+from utils.reusable_classes import TimeUserStamps, TimeStamps
 
 
 class ResumeStatus(models.TextChoices):
@@ -27,7 +25,14 @@ def resume_upload_path(instance, filename):
     return f'resumes/{instance.company_id}/{uuid.uuid4()}/{filename}'
 
 
-class Resume(models.Model):
+# ─────────────────────────────────────────────────────────
+#  Resume
+# ─────────────────────────────────────────────────────────
+class Resume(TimeUserStamps):
+    """
+    Inherits from TimeUserStamps:
+        created_at, updated_at, deleted, created_by, updated_by
+    """
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
 
     # ── Candidate Info ──────────────────────────────────
@@ -46,40 +51,40 @@ class Resume(models.Model):
     file_size_kb      = models.PositiveIntegerField(default=0)
 
     # ── Parsed Content ──────────────────────────────────
-    raw_text        = models.TextField(blank=True)
-    parsed_data     = models.JSONField(default=dict, blank=True)   # full LLM output
+    raw_text    = models.TextField(blank=True)
+    parsed_data = models.JSONField(default=dict, blank=True)   # full LLM output
 
     # ── Education ───────────────────────────────────────
-    highest_education  = models.CharField(max_length=20, choices=EducationLevel.choices, blank=True)
-    education_details  = models.JSONField(default=list, blank=True)
+    highest_education = models.CharField(
+        max_length=20, choices=EducationLevel.choices, blank=True
+    )
+    education_details = models.JSONField(default=list, blank=True)
 
     # ── Experience ──────────────────────────────────────
     total_experience_years = models.FloatField(default=0)
     experience_details     = models.JSONField(default=list, blank=True)
 
     # ── Skills / Certs (AI-extracted) ───────────────────
-    extracted_skills  = models.JSONField(default=list, blank=True)
-    certifications    = models.JSONField(default=list, blank=True)
-    languages         = models.JSONField(default=list, blank=True)
+    extracted_skills = models.JSONField(default=list, blank=True)
+    certifications   = models.JSONField(default=list, blank=True)
+    languages        = models.JSONField(default=list, blank=True)
 
     # ── Vector Store ────────────────────────────────────
     embedding_id = models.CharField(max_length=255, blank=True, db_index=True)
     is_indexed   = models.BooleanField(default=False)
 
     # ── Status ──────────────────────────────────────────
-    status      = models.CharField(max_length=20, choices=ResumeStatus.choices, default=ResumeStatus.UPLOADED)
+    status      = models.CharField(
+        max_length=20, choices=ResumeStatus.choices, default=ResumeStatus.UPLOADED
+    )
     parse_error = models.TextField(blank=True)
 
     # ── Management ──────────────────────────────────────
-    company     = models.ForeignKey('users.Company', on_delete=models.CASCADE, related_name='resumes')
-    uploaded_by = models.ForeignKey(User, on_delete=models.SET_NULL, null=True, related_name='uploaded_resumes')
-    is_active   = models.BooleanField(default=True)
-    tags        = models.JSONField(default=list, blank=True)
-    notes       = models.TextField(blank=True)
-
-    created_at = models.DateTimeField(auto_now_add=True)
-    updated_at = models.DateTimeField(auto_now=True)
-    parsed_at  = models.DateTimeField(null=True, blank=True)
+    company  = models.ForeignKey('users.Company', on_delete=models.CASCADE, related_name='resumes')
+    is_active = models.BooleanField(default=True)
+    tags      = models.JSONField(default=list, blank=True)
+    notes     = models.TextField(blank=True)
+    parsed_at = models.DateTimeField(null=True, blank=True)
 
     class Meta:
         db_table = 'resumes'
@@ -88,6 +93,7 @@ class Resume(models.Model):
             models.Index(fields=['company', 'status']),
             models.Index(fields=['candidate_email']),
             models.Index(fields=['is_active', 'company']),
+            models.Index(fields=['deleted']),
         ]
 
     def __str__(self):
@@ -117,13 +123,27 @@ class Resume(models.Model):
         ]
         return '\n'.join(p for p in parts if p)
 
+    def soft_delete(self, user=None):
+        """Deactivate + soft-delete in one call."""
+        self.deleted    = True
+        self.is_active  = False
+        self.updated_by = user
+        self.save(update_fields=['deleted', 'is_active', 'updated_by', 'updated_at'])
 
-class ResumeSkill(models.Model):
+ 
+# ─────────────────────────────────────────────────────────
+#  ResumeSkill
+# ─────────────────────────────────────────────────────────
+class ResumeSkill(TimeStamps):
+    """
+    Inherits from TimeStamps:
+        created_at, updated_at, deleted
+    """
     id          = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     resume      = models.ForeignKey(Resume, on_delete=models.CASCADE, related_name='skills')
     name        = models.CharField(max_length=100, db_index=True)
-    category    = models.CharField(max_length=50, blank=True)     # technical / soft / domain
-    proficiency = models.CharField(max_length=50, blank=True)     # beginner / intermediate / expert
+    category    = models.CharField(max_length=50, blank=True)    # technical / soft / domain
+    proficiency = models.CharField(max_length=50, blank=True)    # beginner / intermediate / expert
     years_used  = models.FloatField(default=0)
 
     class Meta:
@@ -134,8 +154,14 @@ class ResumeSkill(models.Model):
         return f'{self.name} ({self.resume.candidate_name})'
 
 
-class ResumeParseLog(models.Model):
-    """Audit trail for each parsing attempt."""
+# ─────────────────────────────────────────────────────────
+#  ResumeParseLog
+# ─────────────────────────────────────────────────────────
+class ResumeParseLog(TimeStamps):
+    """
+    Audit trail for each parsing attempt.
+    Inherits from TimeStamps: created_at, updated_at, deleted
+    """
     id                 = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     resume             = models.ForeignKey(Resume, on_delete=models.CASCADE, related_name='parse_logs')
     agent              = models.CharField(max_length=100)
@@ -143,25 +169,29 @@ class ResumeParseLog(models.Model):
     message            = models.TextField(blank=True)
     processing_time_ms = models.IntegerField(default=0)
     tokens_used        = models.IntegerField(default=0)
-    created_at         = models.DateTimeField(auto_now_add=True)
 
     class Meta:
         db_table = 'resume_parse_logs'
         ordering = ['-created_at']
 
 
-class BulkResumeUpload(models.Model):
-    """Tracks a bulk-upload session."""
+# ─────────────────────────────────────────────────────────
+#  BulkResumeUpload
+# ─────────────────────────────────────────────────────────
+class BulkResumeUpload(TimeStamps):
+    """
+    Tracks a bulk-upload session.
+    Inherits from TimeStamps: created_at, updated_at, deleted
+    """
     id              = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     company         = models.ForeignKey('users.Company', on_delete=models.CASCADE, related_name='bulk_uploads')
-    uploaded_by     = models.ForeignKey(User, on_delete=models.SET_NULL, null=True)
+    uploaded_by     = models.ForeignKey('users.User', on_delete=models.SET_NULL, null=True)
     total_files     = models.PositiveIntegerField(default=0)
     processed_files = models.PositiveIntegerField(default=0)
     failed_files    = models.PositiveIntegerField(default=0)
     status          = models.CharField(max_length=20, default='pending')  # pending | processing | completed | failed
     task_id         = models.CharField(max_length=255, blank=True)
     tags            = models.JSONField(default=list, blank=True)
-    created_at      = models.DateTimeField(auto_now_add=True)
     completed_at    = models.DateTimeField(null=True, blank=True)
 
     class Meta:

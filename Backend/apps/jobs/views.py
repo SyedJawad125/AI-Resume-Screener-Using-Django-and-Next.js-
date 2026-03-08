@@ -289,11 +289,12 @@ from utils.response_messages import SUCCESSFUL, NOT_FOUND, ID_NOT_PROVIDED
 from utils.decorator import permission_required
 from utils.permission_enums import *
 
-from .models import JobDescription, JobStatus
+from .models import JobDescription, JobSkill, JobStatus
 from .serializers import (
     JobDescriptionWriteSerializer,
     JobDescriptionDetailSerializer,
     JobDescriptionListSerializer,
+    JobSkillSerializer,
 )
 from .filters import JobDescriptionFilter
 
@@ -301,23 +302,14 @@ logger = logging.getLogger(__name__)
 
 
 def _scope_filters(user):
-    """
-    Return extra_filters scoped to user's company.
-    If the user has no company (super admin), return {} to see all jobs.
-    """
     company = getattr(user, 'company', None)
     if company:
         return {'company': company}
-    return {}  # Super admin or company-less user sees everything
+    return {}
 
 
 # ─────────────────────────────────────────────────────────
 #  Main CRUD   →   /api/jobs/v1/job/
-#  GET    ?id=<uuid>   → single detail
-#  GET                 → paginated list
-#  POST               → create
-#  PATCH  ?id=<uuid>  → partial update
-#  DELETE ?id=<uuid>  → soft delete (archive)
 # ─────────────────────────────────────────────────────────
 @extend_schema(tags=['jobs'])
 class JobView(BaseView):
@@ -339,21 +331,12 @@ class JobView(BaseView):
 
         if job_id:
             try:
-                queryset = JobDescription.objects.filter(
-                    deleted=False,
-                    **self.extra_filters
-                )
-                instance = queryset.get(id=job_id)
+                queryset   = JobDescription.objects.filter(deleted=False, **self.extra_filters)
+                instance   = queryset.get(id=job_id)
                 serializer = JobDescriptionDetailSerializer(instance, context={'request': request})
-                return Response(
-                    create_response(SUCCESSFUL, serializer.data),
-                    status=status.HTTP_200_OK
-                )
+                return Response(create_response(SUCCESSFUL, serializer.data), status=status.HTTP_200_OK)
             except JobDescription.DoesNotExist:
-                return Response(
-                    create_response(NOT_FOUND),
-                    status=status.HTTP_404_NOT_FOUND
-                )
+                return Response(create_response(NOT_FOUND), status=status.HTTP_404_NOT_FOUND)
         else:
             return super().get_(request)
 
@@ -372,15 +355,11 @@ class JobView(BaseView):
                 return Response(create_response(ID_NOT_PROVIDED), status=status.HTTP_400_BAD_REQUEST)
 
             extra    = _scope_filters(request.user)
-            instance = JobDescription.objects.filter(
-                deleted=False, id=job_id, **extra
-            ).first()
-
+            instance = JobDescription.objects.filter(deleted=False, id=job_id, **extra).first()
             if not instance:
                 return Response(create_response(NOT_FOUND), status=status.HTTP_404_NOT_FOUND)
 
             instance.soft_delete(user=request.user)
-
             serialized_resp = self.serializer_class(instance, context={'request': request}).data
             return Response(create_response(SUCCESSFUL, serialized_resp), status=status.HTTP_200_OK)
 
@@ -462,9 +441,7 @@ class JobAnalyzeView(BaseView):
                 return Response(create_response(ID_NOT_PROVIDED), status=status.HTTP_400_BAD_REQUEST)
 
             extra    = _scope_filters(request.user)
-            instance = JobDescription.objects.filter(
-                deleted=False, id=job_id, **extra
-            ).first()
+            instance = JobDescription.objects.filter(deleted=False, id=job_id, **extra).first()
             if not instance:
                 return Response(create_response(NOT_FOUND), status=status.HTTP_404_NOT_FOUND)
 
@@ -497,9 +474,7 @@ class JobStatsView(BaseView):
     @permission_required([STATS_JOB])
     def get(self, request):
         try:
-            qs = JobDescription.objects.filter(
-                deleted=False, **_scope_filters(request.user)
-            )
+            qs   = JobDescription.objects.filter(deleted=False, **_scope_filters(request.user))
             data = {
                 'total':            qs.count(),
                 'active':           qs.filter(status=JobStatus.ACTIVE).count(),
@@ -515,3 +490,146 @@ class JobStatsView(BaseView):
         except Exception as e:
             logger.exception("JobStatsView.get error: %s", e)
             return Response(create_response(str(e)), status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+
+# ─────────────────────────────────────────────────────────
+#  Job Skills   →   /api/jobs/v1/job/skills/
+#  GET    ?job_id=<uuid>              → list all skills for job
+#  POST   ?job_id=<uuid>              → add a skill
+#  PATCH  ?job_id=<uuid>&id=<uuid>   → update a skill
+#  DELETE ?job_id=<uuid>&id=<uuid>   → delete a skill
+# ─────────────────────────────────────────────────────────
+@extend_schema(tags=['jobs'])
+class JobSkillView(BaseView):
+    permission_classes = (IsAuthenticated,)
+    serializer_class   = JobSkillSerializer
+
+    def _get_job(self, request, job_id):
+        """Fetch job scoped to user's company. Returns None if not found."""
+        extra = _scope_filters(request.user)
+        return JobDescription.objects.filter(
+            deleted=False, id=job_id, **extra
+        ).first()
+
+    def _get_skill(self, job, skill_id):
+        """Fetch a single skill belonging to this job."""
+        return JobSkill.objects.filter(
+            id=skill_id, job=job, deleted=False
+        ).first()
+
+    @extend_schema(summary='List all skills for a job')
+    @permission_required([READ_JOB])
+    def get(self, request):
+        job_id = request.query_params.get('job_id')
+        if not job_id:
+            return Response(
+                create_response('job_id query param is required.'),
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        job = self._get_job(request, job_id)
+        if not job:
+            return Response(create_response(NOT_FOUND), status=status.HTTP_404_NOT_FOUND)
+
+        skills = JobSkill.objects.filter(job=job, deleted=False)
+        data   = JobSkillSerializer(skills, many=True).data
+        return Response(create_response(SUCCESSFUL, data), status=status.HTTP_200_OK)
+
+    @extend_schema(summary='Add a skill to a job')
+    @permission_required([UPDATE_JOB])
+    def post(self, request):
+        job_id = request.query_params.get('job_id')
+        if not job_id:
+            return Response(
+                create_response('job_id query param is required.'),
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        job = self._get_job(request, job_id)
+        if not job:
+            return Response(create_response(NOT_FOUND), status=status.HTTP_404_NOT_FOUND)
+
+        serializer = JobSkillSerializer(data=request.data)
+        if serializer.is_valid():
+            # unique_together guard — revive if soft-deleted
+            existing = JobSkill.objects.filter(
+                job=job, name=serializer.validated_data['name']
+            ).first()
+
+            if existing:
+                if existing.deleted:
+                    # Revive the soft-deleted skill with new data
+                    for attr, value in serializer.validated_data.items():
+                        setattr(existing, attr, value)
+                    existing.deleted = False
+                    existing.save()
+                    return Response(
+                        create_response(SUCCESSFUL, JobSkillSerializer(existing).data),
+                        status=status.HTTP_200_OK,
+                    )
+                return Response(
+                    create_response(f'Skill "{existing.name}" already exists for this job.'),
+                    status=status.HTTP_409_CONFLICT,
+                )
+
+            skill = serializer.save(job=job)
+            return Response(
+                create_response(SUCCESSFUL, JobSkillSerializer(skill).data),
+                status=status.HTTP_201_CREATED,
+            )
+
+        return Response(create_response(serializer.errors), status=status.HTTP_400_BAD_REQUEST)
+
+    @extend_schema(summary='Update a skill')
+    @permission_required([UPDATE_JOB])
+    def patch(self, request):
+        job_id   = request.query_params.get('job_id')
+        skill_id = request.query_params.get('id')
+
+        if not job_id or not skill_id:
+            return Response(
+                create_response('Both job_id and id query params are required.'),
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        job = self._get_job(request, job_id)
+        if not job:
+            return Response(create_response(NOT_FOUND), status=status.HTTP_404_NOT_FOUND)
+
+        skill = self._get_skill(job, skill_id)
+        if not skill:
+            return Response(create_response(NOT_FOUND), status=status.HTTP_404_NOT_FOUND)
+
+        serializer = JobSkillSerializer(skill, data=request.data, partial=True)
+        if serializer.is_valid():
+            serializer.save()
+            return Response(create_response(SUCCESSFUL, serializer.data), status=status.HTTP_200_OK)
+
+        return Response(create_response(serializer.errors), status=status.HTTP_400_BAD_REQUEST)
+
+    @extend_schema(summary='Delete a skill (soft delete)')
+    @permission_required([UPDATE_JOB])
+    def delete(self, request):
+        job_id   = request.query_params.get('job_id')
+        skill_id = request.query_params.get('id')
+
+        if not job_id or not skill_id:
+            return Response(
+                create_response('Both job_id and id query params are required.'),
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        job = self._get_job(request, job_id)
+        if not job:
+            return Response(create_response(NOT_FOUND), status=status.HTTP_404_NOT_FOUND)
+
+        skill = self._get_skill(job, skill_id)
+        if not skill:
+            return Response(create_response(NOT_FOUND), status=status.HTTP_404_NOT_FOUND)
+
+        skill.deleted = True
+        skill.save(update_fields=['deleted'])
+        return Response(
+            create_response(SUCCESSFUL, {'id': str(skill.id), 'message': f'Skill "{skill.name}" deleted.'}),
+            status=status.HTTP_200_OK,
+        )

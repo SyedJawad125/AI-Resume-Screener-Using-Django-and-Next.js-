@@ -5,6 +5,7 @@ from .views import (
     JobToggleView,
     JobAnalyzeView,
     JobStatsView,
+    JobSkillView,      # ← new
 )
 
 urlpatterns = [
@@ -22,4 +23,7 @@ urlpatterns = [
 
     # ─── Company job statistics  GET
     path('v1/job/stats/',    JobStatsView.as_view(),   name='job-stats'),
+
+    # ─── Job Skills  ?job_id=<uuid>  &id=<skill_uuid>
+    path('v1/job/skills/',   JobSkillView.as_view(),   name='job-skills'),
 ]

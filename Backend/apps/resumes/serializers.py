@@ -3,9 +3,9 @@ from rest_framework import serializers
 from .models import Resume, ResumeSkill, BulkResumeUpload, ResumeStatus
 
 
-# ─────────────────────────────────────────────
-#  Skill
-# ─────────────────────────────────────────────
+# ─────────────────────────────────────────────────────────
+#  ResumeSkill
+# ─────────────────────────────────────────────────────────
 class ResumeSkillSerializer(serializers.ModelSerializer):
     class Meta:
         model  = ResumeSkill
@@ -13,44 +13,9 @@ class ResumeSkillSerializer(serializers.ModelSerializer):
         read_only_fields = ['id']
 
 
-# ─────────────────────────────────────────────
-#  Upload (single)
-# ─────────────────────────────────────────────
-class ResumeUploadSerializer(serializers.Serializer):
-    file  = serializers.FileField()
-    tags  = serializers.ListField(child=serializers.CharField(max_length=50), required=False, default=list)
-    notes = serializers.CharField(required=False, allow_blank=True, default='')
-
-    def validate_file(self, value):
-        max_bytes = getattr(settings, 'MAX_UPLOAD_SIZE', 10 * 1024 * 1024)
-        if value.size > max_bytes:
-            raise serializers.ValidationError(
-                f'File too large ({value.size // 1024} KB). Maximum: {max_bytes // 1024 // 1024} MB.'
-            )
-        ext = value.name.rsplit('.', 1)[-1].lower()
-        if ext not in ['pdf', 'docx', 'doc']:
-            raise serializers.ValidationError(f'Unsupported type ".{ext}". Allowed: pdf, docx, doc.')
-        return value
-
-    def create(self, validated_data):
-        request = self.context['request']
-        f = validated_data['file']
-        return Resume.objects.create(
-            file              = f,
-            original_filename = f.name,
-            file_type         = f.name.rsplit('.', 1)[-1].lower(),
-            file_size_kb      = f.size // 1024,
-            company           = request.user.company,
-            uploaded_by       = request.user,
-            tags              = validated_data.get('tags', []),
-            notes             = validated_data.get('notes', ''),
-            status            = ResumeStatus.UPLOADED,
-        )
-
-
-# ─────────────────────────────────────────────
+# ─────────────────────────────────────────────────────────
 #  Bulk Upload
-# ─────────────────────────────────────────────
+# ─────────────────────────────────────────────────────────
 class BulkUploadSerializer(serializers.Serializer):
     files = serializers.ListField(child=serializers.FileField(), min_length=1, max_length=100)
     tags  = serializers.ListField(child=serializers.CharField(max_length=50), required=False, default=list)
@@ -60,9 +25,11 @@ class BulkUploadSerializer(serializers.Serializer):
         for f in value:
             ext = f.name.rsplit('.', 1)[-1].lower()
             if ext not in ['pdf', 'docx', 'doc']:
-                raise serializers.ValidationError(f'"{f.name}": unsupported type.')
+                raise serializers.ValidationError(f'"{f.name}": unsupported file type.')
             if f.size > max_bytes:
-                raise serializers.ValidationError(f'"{f.name}": exceeds size limit.')
+                raise serializers.ValidationError(
+                    f'"{f.name}": exceeds size limit of {max_bytes // 1024 // 1024} MB.'
+                )
         return value
 
 
@@ -78,11 +45,13 @@ class BulkUploadStatusSerializer(serializers.ModelSerializer):
         read_only_fields = fields
 
 
-# ─────────────────────────────────────────────
-#  List (lightweight)
-# ─────────────────────────────────────────────
+# ─────────────────────────────────────────────────────────
+#  List serializer  (lightweight — cards / tables)
+# ─────────────────────────────────────────────────────────
 class ResumeListSerializer(serializers.ModelSerializer):
     uploaded_by_name = serializers.SerializerMethodField()
+    created_by_name  = serializers.SerializerMethodField()
+    updated_by_name  = serializers.SerializerMethodField()
     skills_count     = serializers.SerializerMethodField()
 
     class Meta:
@@ -92,24 +61,40 @@ class ResumeListSerializer(serializers.ModelSerializer):
             'original_filename', 'file_type', 'file_size_kb',
             'highest_education', 'total_experience_years',
             'status', 'is_indexed', 'is_active',
-            'skills_count', 'uploaded_by_name', 'tags',
+            'skills_count', 'tags',
+            'uploaded_by_name', 'created_by_name', 'updated_by_name',
             'created_at', 'updated_at',
         ]
-
-    def get_uploaded_by_name(self, obj):
-        return obj.uploaded_by.get_full_name() if obj.uploaded_by else None
 
     def get_skills_count(self, obj):
         return len(obj.skills_list)
 
+    def get_uploaded_by_name(self, obj):
+        # created_by is the uploader (set in write serializer)
+        if obj.created_by:
+            name = obj.created_by.get_full_name()
+            return name.strip() if name and name.strip() else obj.created_by.username
+        return None
 
-# ─────────────────────────────────────────────
-#  Detail (full)
-# ─────────────────────────────────────────────
+    def get_created_by_name(self, obj):
+        return self.get_uploaded_by_name(obj)
+
+    def get_updated_by_name(self, obj):
+        if obj.updated_by:
+            name = obj.updated_by.get_full_name()
+            return name.strip() if name and name.strip() else obj.updated_by.username
+        return None
+
+
+# ─────────────────────────────────────────────────────────
+#  Detail serializer  (full — single resume retrieve)
+# ─────────────────────────────────────────────────────────
 class ResumeDetailSerializer(serializers.ModelSerializer):
-    skills           = ResumeSkillSerializer(many=True, read_only=True)
-    uploaded_by_name = serializers.SerializerMethodField()
+    skills           = serializers.SerializerMethodField()
     skills_list      = serializers.ReadOnlyField()
+    uploaded_by_name = serializers.SerializerMethodField()
+    created_by_name  = serializers.SerializerMethodField()
+    updated_by_name  = serializers.SerializerMethodField()
 
     class Meta:
         model  = Resume
@@ -125,7 +110,8 @@ class ResumeDetailSerializer(serializers.ModelSerializer):
             'skills',
             'embedding_id', 'is_indexed',
             'status', 'parse_error',
-            'company', 'uploaded_by_name', 'is_active', 'tags', 'notes',
+            'company', 'is_active', 'tags', 'notes',
+            'uploaded_by_name', 'created_by_name', 'updated_by_name',
             'created_at', 'updated_at', 'parsed_at',
         ]
         read_only_fields = [
@@ -137,19 +123,136 @@ class ResumeDetailSerializer(serializers.ModelSerializer):
             'created_at', 'updated_at', 'parsed_at',
         ]
 
+    def get_skills(self, obj):
+        return ResumeSkillSerializer(
+            obj.skills.filter(deleted=False), many=True
+        ).data
 
-# ─────────────────────────────────────────────
-#  Update (metadata only)
-# ─────────────────────────────────────────────
-class ResumeUpdateSerializer(serializers.ModelSerializer):
+    def get_uploaded_by_name(self, obj):
+        if obj.created_by:
+            name = obj.created_by.get_full_name()
+            return name.strip() if name and name.strip() else obj.created_by.username
+        return None
+
+    def get_created_by_name(self, obj):
+        return self.get_uploaded_by_name(obj)
+
+    def get_updated_by_name(self, obj):
+        if obj.updated_by:
+            name = obj.updated_by.get_full_name()
+            return name.strip() if name and name.strip() else obj.updated_by.username
+        return None
+
+    def to_representation(self, instance):
+        """Show archived/deleted message on soft-delete response."""
+        if instance.deleted:
+            return {
+                'id':      str(instance.id),
+                'name':    instance.candidate_name or instance.original_filename,
+                'message': f'Resume "{instance.candidate_name or instance.original_filename}" has been removed successfully.',
+            }
+        return super().to_representation(instance)
+
+
+# ─────────────────────────────────────────────────────────
+#  Write serializer  (upload / update)
+# ─────────────────────────────────────────────────────────
+class ResumeWriteSerializer(serializers.ModelSerializer):
+    """
+    Used for single resume upload (POST) and metadata updates (PATCH).
+    File validation is handled here; AI-populated fields are read-only.
+    """
+    file             = serializers.FileField(required=True)
+    created_by_name  = serializers.SerializerMethodField(read_only=True)
+    updated_by_name  = serializers.SerializerMethodField(read_only=True)
+
     class Meta:
         model  = Resume
-        fields = ['candidate_name', 'candidate_email', 'candidate_phone',
-                  'candidate_location', 'tags', 'notes', 'is_active']
+        fields = [
+            'id',
+            'candidate_name', 'candidate_email', 'candidate_phone',
+            'candidate_location', 'candidate_linkedin', 'candidate_github', 'candidate_website',
+            'file', 'original_filename', 'file_type', 'file_size_kb',
+            'is_active', 'tags', 'notes',
+            'company',                          # writable — required for superuser
+            'created_by_name', 'updated_by_name',
+            'created_at', 'updated_at',
+        ]
+        read_only_fields = [
+            'id', 'original_filename', 'file_type', 'file_size_kb',
+            'created_at', 'updated_at',
+        ]
+
+    def get_created_by_name(self, obj):
+        if obj.created_by:
+            name = obj.created_by.get_full_name()
+            return name.strip() if name and name.strip() else obj.created_by.username
+        return None
+
+    def get_updated_by_name(self, obj):
+        if obj.updated_by:
+            name = obj.updated_by.get_full_name()
+            return name.strip() if name and name.strip() else obj.updated_by.username
+        return None
+
+    def validate_file(self, value):
+        max_bytes = getattr(settings, 'MAX_UPLOAD_SIZE', 10 * 1024 * 1024)
+        if value.size > max_bytes:
+            raise serializers.ValidationError(
+                f'File too large ({value.size // 1024} KB). Maximum: {max_bytes // 1024 // 1024} MB.'
+            )
+        ext = value.name.rsplit('.', 1)[-1].lower()
+        if ext not in ['pdf', 'docx', 'doc']:
+            raise serializers.ValidationError(
+                f'Unsupported type ".{ext}". Allowed: pdf, docx, doc.'
+            )
+        return value
+
+    def create(self, validated_data):
+        request = self.context['request']
+        user    = request.user
+        f       = validated_data['file']
+
+        if 'company' not in validated_data:
+            company = getattr(user, 'company', None)
+            if not company:
+                raise serializers.ValidationError(
+                    {'company': 'Your account has no company assigned. Pass company in the request or contact admin.'}
+                )
+            validated_data['company'] = company
+
+        return Resume.objects.create(
+            **validated_data,
+            original_filename = f.name,
+            file_type         = f.name.rsplit('.', 1)[-1].lower(),
+            file_size_kb      = f.size // 1024,
+            created_by        = user,
+            status            = ResumeStatus.UPLOADED,
+        )
+
+    def update(self, instance, validated_data):
+        # Only metadata fields are updatable; file re-upload is not allowed on PATCH
+        validated_data.pop('file', None)
+        for attr, value in validated_data.items():
+            setattr(instance, attr, value)
+        instance.save()
+        return instance
+
+    def to_representation(self, instance):
+        """Show archived/deleted message on soft-delete response."""
+        if instance.deleted:
+            return {
+                'id':      str(instance.id),
+                'name':    instance.candidate_name or instance.original_filename,
+                'message': f'Resume "{instance.candidate_name or instance.original_filename}" has been removed successfully.',
+            }
+        return super().to_representation(instance)
 
 
-# ─────────────────────────────────────────────
+# ─────────────────────────────────────────────────────────
 #  Retry parse
-# ─────────────────────────────────────────────
+# ─────────────────────────────────────────────────────────
 class ResumeRetryParseSerializer(serializers.Serializer):
-    resume_ids = serializers.ListField(child=serializers.UUIDField(), min_length=1, max_length=50)
+    resume_ids = serializers.ListField(
+        child=serializers.UUIDField(), min_length=1, max_length=50
+    )

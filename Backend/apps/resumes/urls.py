@@ -1,20 +1,29 @@
 from django.urls import path
 from .views import (
+    ResumeView,
     ResumeListView,
-    ResumeUploadView,
-    ResumeDetailView,
-    bulk_upload_view,
-    bulk_upload_status_view,
-    retry_parse_view,
-    resume_stats_view,
+    ResumeBulkUploadView,
+    ResumeBulkUploadStatusView,
+    ResumeRetryParseView,
+    ResumeStatsView,
 )
 
 urlpatterns = [
-    path('',                                            ResumeListView.as_view(),         name='resume-list'),
-    path('upload/',                                     ResumeUploadView.as_view(),        name='resume-upload'),
-    path('bulk-upload/',                                bulk_upload_view,                  name='resume-bulk-upload'),
-    path('bulk-upload/<uuid:session_id>/status/',       bulk_upload_status_view,           name='bulk-upload-status'),
-    path('retry-parse/',                                retry_parse_view,                  name='resume-retry-parse'),
-    path('stats/',                                      resume_stats_view,                 name='resume-stats'),
-    path('<uuid:id>/',                                  ResumeDetailView.as_view(),        name='resume-detail'),
+    # ─── Main CRUD (GET list, GET detail ?id=, POST upload, PATCH ?id=, DELETE ?id=)
+    path('v1/resume/',                  ResumeView.as_view(),                 name='resume'),
+
+    # ─── Lightweight list for tables / dropdowns
+    path('v1/resume/list/',             ResumeListView.as_view(),             name='resume-list'),
+
+    # ─── Bulk upload  POST  (multipart, up to 100 files)
+    path('v1/resume/bulk-upload/',      ResumeBulkUploadView.as_view(),       name='resume-bulk-upload'),
+
+    # ─── Bulk upload session status  GET  ?session_id=<uuid>
+    path('v1/resume/bulk-upload/status/', ResumeBulkUploadStatusView.as_view(), name='resume-bulk-upload-status'),
+
+    # ─── Re-trigger parsing for failed resumes  POST  body: {"resume_ids": [...]}
+    path('v1/resume/retry-parse/',      ResumeRetryParseView.as_view(),       name='resume-retry-parse'),
+
+    # ─── Company resume statistics  GET
+    path('v1/resume/stats/',            ResumeStatsView.as_view(),            name='resume-stats'),
 ]

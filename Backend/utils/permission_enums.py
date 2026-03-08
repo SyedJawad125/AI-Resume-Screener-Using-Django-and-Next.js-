@@ -104,15 +104,17 @@ UPDATE_JOB  = "update_job"
 DELETE_JOB  = "delete_job"
 ANALYZE_JOB = "analyze_job"
 STATS_JOB   = "stats_job"
+TOGGLE_JOB  = "toggle_job"   # ← was missing
+# ─── RESUMES ─────────────────────────────────────
+SHOW_RESUME         = 'show_resume'          # lightweight list — tables / dropdowns
+UPLOAD_RESUME       = 'upload_resume'        # POST  /resume/          (single upload)
+READ_RESUME         = 'read_resume'          # GET   /resume/?id=  or list
+UPDATE_RESUME       = 'update_resume'        # PATCH /resume/?id=      (metadata only)
+DELETE_RESUME       = 'delete_resume'        # DELETE /resume/?id=     (soft-delete)
+BULK_UPLOAD_RESUME  = 'bulk_upload_resume'   # POST  /resume/bulk-upload/  + status GET
+RETRY_PARSE_RESUME  = 'retry_parse_resume'   # POST  /resume/retry-parse/
+STATS_RESUME        = 'stats_resume'         # GET   /resume/stats/
 
-# ─────────────────────────────────────────────
-#  RESUME
-# ─────────────────────────────────────────────
-SHOW_RESUME   = "show_resume"
-CREATE_RESUME = "create_resume"
-READ_RESUME   = "read_resume"
-UPDATE_RESUME = "update_resume"
-DELETE_RESUME = "delete_resume"
 
 # ─────────────────────────────────────────────
 #  SCREENING
