@@ -1,5 +1,5 @@
 # import logging
-# from rest_framework.parsers import MultiPartParser, FormParser
+# from rest_framework.parsers import MultiPartParser, FormParser, JSONParser  
 # from rest_framework.permissions import IsAuthenticated
 # from rest_framework.response import Response
 # from rest_framework import status
@@ -27,17 +27,26 @@
 # def _scope_filters(user):
 #     """
 #     Return queryset filters scoped to the user's company & role.
-#     Super admins (no company) see all resumes.
-#     Recruiters see only their own uploads.
+#     Super admins (role=1) see all resumes.
 #     """
-#     from apps.users.models import UserRole
+#     # Check if user is Super Admin (role=1 from your login response)
+#     if getattr(user, 'role', None) == 1:  # Super Admin
+#         return {'deleted': False}
+    
+#     # For users with company
 #     company = getattr(user, 'company', None)
-#     if not company:
-#         return {}                                          # super admin — no restriction
-#     filters = {'company': company, 'deleted': False}
-#     if getattr(user, 'role', None) == UserRole.RECRUITER:
-#         filters['created_by'] = user
-#     return filters
+#     if company:
+#         filters = {'company': company, 'deleted': False}
+        
+#         # Check if user has RECRUITER role - based on your permission enums
+#         # You can check by permission or role value
+#         if not user.has_perm(SHOW_ALL_RESUMES):  # If no permission to see all resumes
+#             filters['created_by'] = user
+            
+#         return filters
+    
+#     # Default: show only non-deleted resumes created by this user
+#     return {'created_by': user, 'deleted': False}
 
 
 # # ─────────────────────────────────────────────────────────
@@ -51,7 +60,7 @@
 # @extend_schema(tags=['resumes'])
 # class ResumeView(BaseView):
 #     permission_classes = (IsAuthenticated,)
-#     parser_classes     = (MultiPartParser, FormParser)
+#     parser_classes     = (MultiPartParser, FormParser, JSONParser)
 #     serializer_class   = ResumeWriteSerializer
 #     list_serializer    = ResumeListSerializer
 #     filterset_class    = ResumeFilter
@@ -60,27 +69,52 @@
 #     @permission_required([UPLOAD_RESUME])
 #     def post(self, request):
 #         self.extra_filters = _scope_filters(request.user)
-#         serializer = self.serializer_class(data=request.data, context={'request': request})
+        
+#         # Handle both JSON and multipart form data
+#         if request.content_type == 'application/json':
+#             # For JSON requests, use the data directly
+#             data = request.data.copy() if hasattr(request.data, 'copy') else dict(request.data)
+#         else:
+#             # For multipart/form-data, copy the data
+#             data = request.data.copy()
+        
+#         # Add company from user if not provided AND user has a company
+#         if not data.get('company'):
+#             if hasattr(request.user, 'company') and request.user.company:
+#                 data['company'] = request.user.company.id
+#             else:
+#                 # For Super Admin or users without company, company field is required in the request
+#                 if not data.get('company'):
+#                     return Response(
+#                         create_response('company field is required for users without an assigned company'),
+#                         status=status.HTTP_400_BAD_REQUEST
+#                     )
+            
+#         serializer = self.serializer_class(data=data, context={'request': request})
 #         if not serializer.is_valid():
 #             return Response(create_response(serializer.errors), status=status.HTTP_400_BAD_REQUEST)
 
-#         resume = serializer.save()
+#         resume = serializer.save(created_by=request.user)
 
 #         # Trigger async parsing
-#         from apps.core.tasks import parse_resume_task
-#         task = parse_resume_task.delay(str(resume.id))
+#         try:
+#             from apps.core.tasks import parse_resume_task
+#             task = parse_resume_task.delay(str(resume.id))
+#             logger.info('Resume %s uploaded by %s — parse task: %s', resume.id, request.user.email, task.id)
+#             task_id = task.id
+#         except ImportError:
+#             logger.warning('parse_resume_task not available, skipping async parsing')
+#             task_id = None
 
-#         logger.info('Resume %s uploaded by %s — parse task: %s', resume.id, request.user.email, task.id)
 #         return Response(
 #             create_response(SUCCESSFUL, {
 #                 'resume_id': str(resume.id),
-#                 'task_id':   task.id,
+#                 'task_id':   task_id,
 #                 'status':    resume.status,
 #                 'message':   'Resume uploaded successfully. Parsing in progress.',
 #             }),
 #             status=status.HTTP_201_CREATED,
 #         )
-
 #     @extend_schema(summary='List or retrieve resumes')
 #     @permission_required([READ_RESUME])
 #     def get(self, request):
@@ -168,7 +202,7 @@
 #             tags    = serializer.validated_data.get('tags', [])
 #             company = getattr(request.user, 'company', None)
 
-#             if not company:
+#             if not company and getattr(request.user, 'role', None) != 1:  # Not super admin
 #                 return Response(
 #                     create_response('Your account has no company assigned.'),
 #                     status=status.HTTP_400_BAD_REQUEST,
@@ -199,19 +233,24 @@
 #                 resume_ids.append(str(r.id))
 
 #             # Fire bulk parse task
-#             from apps.core.tasks import bulk_parse_resumes_task
-#             task = bulk_parse_resumes_task.delay(resume_ids, str(session.id))
-#             session.task_id = task.id
-#             session.save(update_fields=['task_id'])
+#             try:
+#                 from apps.core.tasks import bulk_parse_resumes_task
+#                 task = bulk_parse_resumes_task.delay(resume_ids, str(session.id))
+#                 session.task_id = task.id
+#                 session.save(update_fields=['task_id'])
+#                 task_id = task.id
+#             except ImportError:
+#                 logger.warning('bulk_parse_resumes_task not available, skipping async parsing')
+#                 task_id = None
 
 #             logger.info(
 #                 'Bulk upload: %d resumes by %s — session: %s, task: %s',
-#                 len(files), request.user.email, session.id, task.id,
+#                 len(files), request.user.email, session.id, task_id,
 #             )
 #             return Response(
 #                 create_response(SUCCESSFUL, {
 #                     'bulk_session_id': str(session.id),
-#                     'task_id':         task.id,
+#                     'task_id':         task_id,
 #                     'total_files':     len(files),
 #                     'message':         f'{len(files)} resumes uploaded. Parsing in progress.',
 #                 }),
@@ -241,7 +280,9 @@
 
 #             filters = {'id': session_id}
 #             company = getattr(request.user, 'company', None)
-#             if company:
+            
+#             # Super admin can see any session
+#             if getattr(request.user, 'role', None) != 1 and company:
 #                 filters['company'] = company
 
 #             session = BulkResumeUpload.objects.filter(**filters).first()
@@ -282,8 +323,16 @@
 #                     status=status.HTTP_404_NOT_FOUND,
 #                 )
 
-#             from apps.core.tasks import parse_resume_task
-#             task_ids = [parse_resume_task.delay(str(r.id)).id for r in resumes]
+#             task_ids = []
+#             try:
+#                 from apps.core.tasks import parse_resume_task
+#                 for r in resumes:
+#                     task = parse_resume_task.delay(str(r.id))
+#                     task_ids.append(task.id)
+#             except ImportError:
+#                 logger.warning('parse_resume_task not available, skipping async parsing')
+#                 # Update status directly
+#                 resumes.update(status=ResumeStatus.UPLOADED, parse_error='')
 
 #             return Response(
 #                 create_response(SUCCESSFUL, {
@@ -311,7 +360,7 @@
 #     @permission_required([STATS_RESUME])
 #     def get(self, request):
 #         try:
-#             from django.db.models import Avg
+#             from django.db.models import Avg, Count
 #             extra = _scope_filters(request.user)
 #             qs    = Resume.objects.filter(**extra)
 
@@ -339,7 +388,7 @@
 
 
 import logging
-from rest_framework.parsers import MultiPartParser, FormParser, JSONParser  
+from rest_framework.parsers import MultiPartParser, FormParser, JSONParser
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from rest_framework import status
@@ -350,11 +399,13 @@ from utils.reusable_functions import create_response
 from utils.response_messages import SUCCESSFUL, NOT_FOUND, ID_NOT_PROVIDED
 from utils.decorator import permission_required
 from utils.permission_enums import *
-from .models import Resume, BulkResumeUpload, ResumeStatus
+
+from .models import Resume, ResumeSkill, BulkResumeUpload, ResumeStatus
 from .serializers import (
     ResumeWriteSerializer,
     ResumeDetailSerializer,
     ResumeListSerializer,
+    ResumeSkillSerializer,
     BulkUploadSerializer,
     BulkUploadStatusSerializer,
     ResumeRetryParseSerializer,
@@ -366,27 +417,19 @@ logger = logging.getLogger(__name__)
 
 def _scope_filters(user):
     """
-    Return queryset filters scoped to the user's company & role.
-    Super admins (role=1) see all resumes.
+    Return queryset keyword filters scoped to the user's company.
+    Super admins (role == 1) see every resume.
+    Regular users without a company can only see their own uploads.
+    Note: deleted=False is always applied at the call site, not here.
     """
-    # Check if user is Super Admin (role=1 from your login response)
-    if getattr(user, 'role', None) == 1:  # Super Admin
-        return {'deleted': False}
-    
-    # For users with company
+    if getattr(user, 'role', None) == 1:
+        return {}
+
     company = getattr(user, 'company', None)
     if company:
-        filters = {'company': company, 'deleted': False}
-        
-        # Check if user has RECRUITER role - based on your permission enums
-        # You can check by permission or role value
-        if not user.has_perm(SHOW_ALL_RESUMES):  # If no permission to see all resumes
-            filters['created_by'] = user
-            
-        return filters
-    
-    # Default: show only non-deleted resumes created by this user
-    return {'created_by': user, 'deleted': False}
+        return {'company': company}
+
+    return {'created_by': user}
 
 
 # ─────────────────────────────────────────────────────────
@@ -408,40 +451,17 @@ class ResumeView(BaseView):
     @extend_schema(summary='Upload a single resume (multipart/form-data)')
     @permission_required([UPLOAD_RESUME])
     def post(self, request):
-        self.extra_filters = _scope_filters(request.user)
-        
-        # Handle both JSON and multipart form data
-        if request.content_type == 'application/json':
-            # For JSON requests, use the data directly
-            data = request.data.copy() if hasattr(request.data, 'copy') else dict(request.data)
-        else:
-            # For multipart/form-data, copy the data
-            data = request.data.copy()
-        
-        # Add company from user if not provided AND user has a company
-        if not data.get('company'):
-            if hasattr(request.user, 'company') and request.user.company:
-                data['company'] = request.user.company.id
-            else:
-                # For Super Admin or users without company, company field is required in the request
-                if not data.get('company'):
-                    return Response(
-                        create_response('company field is required for users without an assigned company'),
-                        status=status.HTTP_400_BAD_REQUEST
-                    )
-            
-        serializer = self.serializer_class(data=data, context={'request': request})
+        serializer = self.serializer_class(data=request.data, context={'request': request})
         if not serializer.is_valid():
             return Response(create_response(serializer.errors), status=status.HTTP_400_BAD_REQUEST)
 
-        resume = serializer.save(created_by=request.user)
+        resume = serializer.save()
 
-        # Trigger async parsing
         try:
             from apps.core.tasks import parse_resume_task
-            task = parse_resume_task.delay(str(resume.id))
-            logger.info('Resume %s uploaded by %s — parse task: %s', resume.id, request.user.email, task.id)
+            task    = parse_resume_task.delay(str(resume.id))
             task_id = task.id
+            logger.info('Resume %s uploaded by %s — parse task: %s', resume.id, request.user.email, task_id)
         except ImportError:
             logger.warning('parse_resume_task not available, skipping async parsing')
             task_id = None
@@ -455,6 +475,7 @@ class ResumeView(BaseView):
             }),
             status=status.HTTP_201_CREATED,
         )
+
     @extend_schema(summary='List or retrieve resumes')
     @permission_required([READ_RESUME])
     def get(self, request):
@@ -463,17 +484,13 @@ class ResumeView(BaseView):
 
         if resume_id:
             try:
-                queryset = Resume.objects.filter(**self.extra_filters)
-                instance = queryset.get(id=resume_id)
+                instance   = Resume.objects.filter(deleted=False, **self.extra_filters).get(id=resume_id)
                 serializer = ResumeDetailSerializer(instance, context={'request': request})
-                return Response(
-                    create_response(SUCCESSFUL, serializer.data),
-                    status=status.HTTP_200_OK,
-                )
+                return Response(create_response(SUCCESSFUL, serializer.data), status=status.HTTP_200_OK)
             except Resume.DoesNotExist:
                 return Response(create_response(NOT_FOUND), status=status.HTTP_404_NOT_FOUND)
-        else:
-            return super().get_(request)
+
+        return super().get_(request)
 
     @extend_schema(summary='Partial update resume metadata')
     @permission_required([UPDATE_RESUME])
@@ -490,13 +507,11 @@ class ResumeView(BaseView):
                 return Response(create_response(ID_NOT_PROVIDED), status=status.HTTP_400_BAD_REQUEST)
 
             extra    = _scope_filters(request.user)
-            instance = Resume.objects.filter(id=resume_id, **extra).first()
-
+            instance = Resume.objects.filter(deleted=False, id=resume_id, **extra).first()
             if not instance:
                 return Response(create_response(NOT_FOUND), status=status.HTTP_404_NOT_FOUND)
 
             instance.soft_delete(user=request.user)
-
             serialized_resp = self.serializer_class(instance, context={'request': request}).data
             return Response(create_response(SUCCESSFUL, serialized_resp), status=status.HTTP_200_OK)
 
@@ -522,6 +537,142 @@ class ResumeListView(BaseView):
 
 
 # ─────────────────────────────────────────────────────────
+#  Resume Skills   →   /api/resumes/v1/resume/skills/
+#  GET    ?resume_id=<uuid>              → list all skills
+#  POST   ?resume_id=<uuid>              → add a skill
+#  PATCH  ?resume_id=<uuid>&id=<uuid>   → update a skill
+#  DELETE ?resume_id=<uuid>&id=<uuid>   → soft delete a skill
+# ─────────────────────────────────────────────────────────
+@extend_schema(tags=['resumes'])
+class ResumeSkillView(BaseView):
+    permission_classes = (IsAuthenticated,)
+    serializer_class   = ResumeSkillSerializer
+
+    def _get_resume(self, request, resume_id):
+        extra = _scope_filters(request.user)
+        return Resume.objects.filter(deleted=False, id=resume_id, **extra).first()
+
+    def _get_skill(self, resume, skill_id):
+        return ResumeSkill.objects.filter(id=skill_id, resume=resume, deleted=False).first()
+
+    @extend_schema(summary='List all skills for a resume')
+    @permission_required([READ_RESUME])
+    def get(self, request):
+        resume_id = request.query_params.get('resume_id')
+        if not resume_id:
+            return Response(
+                create_response('resume_id query param is required.'),
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        resume = self._get_resume(request, resume_id)
+        if not resume:
+            return Response(create_response(NOT_FOUND), status=status.HTTP_404_NOT_FOUND)
+
+        skills = ResumeSkill.objects.filter(resume=resume, deleted=False)
+        data   = ResumeSkillSerializer(skills, many=True).data
+        return Response(create_response(SUCCESSFUL, data), status=status.HTTP_200_OK)
+
+    @extend_schema(summary='Add a skill to a resume')
+    @permission_required([UPDATE_RESUME])
+    def post(self, request):
+        resume_id = request.query_params.get('resume_id')
+        if not resume_id:
+            return Response(
+                create_response('resume_id query param is required.'),
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        resume = self._get_resume(request, resume_id)
+        if not resume:
+            return Response(create_response(NOT_FOUND), status=status.HTTP_404_NOT_FOUND)
+
+        serializer = ResumeSkillSerializer(data=request.data)
+        if not serializer.is_valid():
+            return Response(create_response(serializer.errors), status=status.HTTP_400_BAD_REQUEST)
+
+        # unique_together guard — revive if soft-deleted
+        existing = ResumeSkill.objects.filter(
+            resume=resume, name=serializer.validated_data['name']
+        ).first()
+
+        if existing:
+            if existing.deleted:
+                for attr, value in serializer.validated_data.items():
+                    setattr(existing, attr, value)
+                existing.deleted = False
+                existing.save()
+                return Response(
+                    create_response(SUCCESSFUL, ResumeSkillSerializer(existing).data),
+                    status=status.HTTP_200_OK,
+                )
+            return Response(
+                create_response(f'Skill "{existing.name}" already exists for this resume.'),
+                status=status.HTTP_409_CONFLICT,
+            )
+
+        skill = serializer.save(resume=resume)
+        return Response(
+            create_response(SUCCESSFUL, ResumeSkillSerializer(skill).data),
+            status=status.HTTP_201_CREATED,
+        )
+
+    @extend_schema(summary='Update a resume skill')
+    @permission_required([UPDATE_RESUME])
+    def patch(self, request):
+        resume_id = request.query_params.get('resume_id')
+        skill_id  = request.query_params.get('id')
+
+        if not resume_id or not skill_id:
+            return Response(
+                create_response('Both resume_id and id query params are required.'),
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        resume = self._get_resume(request, resume_id)
+        if not resume:
+            return Response(create_response(NOT_FOUND), status=status.HTTP_404_NOT_FOUND)
+
+        skill = self._get_skill(resume, skill_id)
+        if not skill:
+            return Response(create_response(NOT_FOUND), status=status.HTTP_404_NOT_FOUND)
+
+        serializer = ResumeSkillSerializer(skill, data=request.data, partial=True)
+        if serializer.is_valid():
+            serializer.save()
+            return Response(create_response(SUCCESSFUL, serializer.data), status=status.HTTP_200_OK)
+
+        return Response(create_response(serializer.errors), status=status.HTTP_400_BAD_REQUEST)
+
+    @extend_schema(summary='Delete a resume skill (soft delete)')
+    @permission_required([UPDATE_RESUME])
+    def delete(self, request):
+        resume_id = request.query_params.get('resume_id')
+        skill_id  = request.query_params.get('id')
+
+        if not resume_id or not skill_id:
+            return Response(
+                create_response('Both resume_id and id query params are required.'),
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        resume = self._get_resume(request, resume_id)
+        if not resume:
+            return Response(create_response(NOT_FOUND), status=status.HTTP_404_NOT_FOUND)
+
+        skill = self._get_skill(resume, skill_id)
+        if not skill:
+            return Response(create_response(NOT_FOUND), status=status.HTTP_404_NOT_FOUND)
+
+        skill.deleted = True
+        skill.save(update_fields=['deleted'])
+        return Response(
+            create_response(SUCCESSFUL, {'id': str(skill.id), 'message': f'Skill "{skill.name}" deleted.'}),
+            status=status.HTTP_200_OK,
+        )
+
+
+# ─────────────────────────────────────────────────────────
 #  Bulk Upload   →   /api/resumes/v1/resume/bulk-upload/
 # ─────────────────────────────────────────────────────────
 @extend_schema(tags=['resumes'])
@@ -542,13 +693,12 @@ class ResumeBulkUploadView(BaseView):
             tags    = serializer.validated_data.get('tags', [])
             company = getattr(request.user, 'company', None)
 
-            if not company and getattr(request.user, 'role', None) != 1:  # Not super admin
+            if not company and getattr(request.user, 'role', None) != 1:
                 return Response(
                     create_response('Your account has no company assigned.'),
                     status=status.HTTP_400_BAD_REQUEST,
                 )
 
-            # Create bulk session record
             session = BulkResumeUpload.objects.create(
                 company     = company,
                 uploaded_by = request.user,
@@ -557,7 +707,6 @@ class ResumeBulkUploadView(BaseView):
                 status      = 'processing',
             )
 
-            # Persist each resume row
             resume_ids = []
             for f in files:
                 r = Resume.objects.create(
@@ -572,7 +721,6 @@ class ResumeBulkUploadView(BaseView):
                 )
                 resume_ids.append(str(r.id))
 
-            # Fire bulk parse task
             try:
                 from apps.core.tasks import bulk_parse_resumes_task
                 task = bulk_parse_resumes_task.delay(resume_ids, str(session.id))
@@ -620,8 +768,6 @@ class ResumeBulkUploadStatusView(BaseView):
 
             filters = {'id': session_id}
             company = getattr(request.user, 'company', None)
-            
-            # Super admin can see any session
             if getattr(request.user, 'role', None) != 1 and company:
                 filters['company'] = company
 
@@ -629,8 +775,10 @@ class ResumeBulkUploadStatusView(BaseView):
             if not session:
                 return Response(create_response(NOT_FOUND), status=status.HTTP_404_NOT_FOUND)
 
-            serializer = BulkUploadStatusSerializer(session)
-            return Response(create_response(SUCCESSFUL, serializer.data), status=status.HTTP_200_OK)
+            return Response(
+                create_response(SUCCESSFUL, BulkUploadStatusSerializer(session).data),
+                status=status.HTTP_200_OK,
+            )
 
         except Exception as e:
             logger.exception('ResumeBulkUploadStatusView.get error: %s', e)
@@ -655,7 +803,7 @@ class ResumeRetryParseView(BaseView):
 
             ids     = [str(i) for i in serializer.validated_data['resume_ids']]
             extra   = _scope_filters(request.user)
-            resumes = Resume.objects.filter(id__in=ids, status=ResumeStatus.FAILED, **extra)
+            resumes = Resume.objects.filter(deleted=False, id__in=ids, status=ResumeStatus.FAILED, **extra)
 
             if not resumes.exists():
                 return Response(
@@ -671,7 +819,6 @@ class ResumeRetryParseView(BaseView):
                     task_ids.append(task.id)
             except ImportError:
                 logger.warning('parse_resume_task not available, skipping async parsing')
-                # Update status directly
                 resumes.update(status=ResumeStatus.UPLOADED, parse_error='')
 
             return Response(
@@ -700,9 +847,9 @@ class ResumeStatsView(BaseView):
     @permission_required([STATS_RESUME])
     def get(self, request):
         try:
-            from django.db.models import Avg, Count
+            from django.db.models import Avg
             extra = _scope_filters(request.user)
-            qs    = Resume.objects.filter(**extra)
+            qs    = Resume.objects.filter(deleted=False, **extra)
 
             data = {
                 'total':          qs.count(),

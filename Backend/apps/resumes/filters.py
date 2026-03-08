@@ -28,7 +28,7 @@ class ResumeFilter(django_filters.FilterSet):
         ]
 
     def filter_by_skill(self, queryset, name, value):
-        """Filter resumes that contain a specific skill name."""
+        """Filter resumes that contain a specific skill name (active skills only)."""
         return queryset.filter(skills__name__icontains=value, skills__deleted=False).distinct()
 
     def filter_by_tag(self, queryset, name, value):
@@ -36,5 +36,5 @@ class ResumeFilter(django_filters.FilterSet):
         return queryset.filter(tags__icontains=value)
 
     def filter_has_parse_error(self, queryset, name, value):
-        """Filter resumes that have or have not encountered a parse error."""
+        """Filter resumes that have (True) or have not (False) encountered a parse error."""
         return queryset.exclude(parse_error='') if value else queryset.filter(parse_error='')
