@@ -62,28 +62,87 @@
 
 
 
-services:
+# services:
 
-  # ── Django web server ──────────────────────────────────────────
-  web:
-    build: .
-    command: gunicorn --bind 0.0.0.0:8000 config.wsgi:application
-    entrypoint: ["/entrypoint.sh"]
-    volumes:
-      - .:/app
-      - chroma_data:/app/chroma_db    # ← vector store persistence
-      - media_data:/app/media         # ← uploaded resumes / images
-    ports:
-      - "8000:8000"
-    env_file:
-      - .env
-    depends_on:
-      - db
-      - rabbitmq
+#   # ── Django web server ──────────────────────────────────────────
+#   web:
+#     build: .
+#     command: gunicorn --bind 0.0.0.0:8000 config.wsgi:application
+#     entrypoint: ["/entrypoint.sh"]
+#     volumes:
+#       - .:/app
+#       - chroma_data:/app/chroma_db    # ← vector store persistence
+#       - media_data:/app/media         # ← uploaded resumes / images
+#     ports:
+#       - "8000:8000"
+#     env_file:
+#       - .env
+#     depends_on:
+#       - db
+#       - rabbitmq
+
+#   # ── PostgreSQL ─────────────────────────────────────────────────
+#   db:
+#     image: postgres:15
+#     environment:
+#       POSTGRES_DB:       ${POSTGRES_DB}
+#       POSTGRES_USER:     ${POSTGRES_USER}
+#       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+#     volumes:
+#       - postgres_data:/var/lib/postgresql/data
+#     ports:
+#       - "5432:5432"
+
+#   # ── RabbitMQ  (Celery broker — unchanged) ──────────────────────
+#   rabbitmq:
+#     image: rabbitmq:3-management
+#     ports:
+#       - "5672:5672"    # broker port
+#       - "15672:15672"  # management UI → http://localhost:15672
+#     environment:
+#       RABBITMQ_DEFAULT_USER: guest
+#       RABBITMQ_DEFAULT_PASS: guest
+
+#   # ── Celery worker ──────────────────────────────────────────────
+#   worker:
+#     build: .
+#     command: celery -A config worker -l info --concurrency=4
+#     entrypoint: ["/entrypoint.sh"]
+#     volumes:
+#       - .:/app
+#       - chroma_data:/app/chroma_db    # ← worker also needs the vector store
+#       - media_data:/app/media         # ← worker reads uploaded resume files
+#     env_file:
+#       - .env
+#     depends_on:
+#       - rabbitmq
+#       - db
+
+#   # ── Adminer  (DB UI) ───────────────────────────────────────────
+#   adminer:
+#     image: adminer
+#     container_name: adminer_AI_Resume_Screener
+#     restart: always
+#     ports:
+#       - "8081:8080"
+
+# volumes:
+#   postgres_data:
+#   chroma_data:     # ← persists ChromaDB vector store between restarts
+#   media_data:      # ← persists uploaded resume files between restarts
+
+
+
+
+
+
+
+services:
 
   # ── PostgreSQL ─────────────────────────────────────────────────
   db:
     image: postgres:15
+    restart: unless-stopped
     environment:
       POSTGRES_DB:       ${POSTGRES_DB}
       POSTGRES_USER:     ${POSTGRES_USER}
@@ -92,41 +151,96 @@ services:
       - postgres_data:/var/lib/postgresql/data
     ports:
       - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
 
-  # ── RabbitMQ  (Celery broker — unchanged) ──────────────────────
+  # ── RabbitMQ  (Celery broker) ──────────────────────────────────
   rabbitmq:
     image: rabbitmq:3-management
+    restart: unless-stopped
     ports:
-      - "5672:5672"    # broker port
-      - "15672:15672"  # management UI → http://localhost:15672
+      - "5672:5672"     # broker port
+      - "15672:15672"   # management UI → http://localhost:15672
     environment:
       RABBITMQ_DEFAULT_USER: guest
       RABBITMQ_DEFAULT_PASS: guest
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # ── Django web server ──────────────────────────────────────────
+  web:
+    build: .
+    restart: unless-stopped
+    entrypoint: ["/entrypoint.sh"]
+    command: ["gunicorn", "--bind", "0.0.0.0:8000", "--workers", "3", "--timeout", "120", "config.wsgi:application"]
+    volumes:
+      - .:/app
+      - chroma_data:/app/chroma_db    # vector store persistence
+      - media_data:/app/media         # uploaded resumes / images
+      - static_data:/app/static       # collected static files
+    ports:
+      - "8000:8000"
+    env_file:
+      - .env
+    depends_on:
+      db:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
 
   # ── Celery worker ──────────────────────────────────────────────
   worker:
     build: .
-    command: celery -A config worker -l info --concurrency=4
+    restart: unless-stopped
     entrypoint: ["/entrypoint.sh"]
+    command: ["celery", "-A", "config", "worker", "-l", "info", "--concurrency=4"]
     volumes:
       - .:/app
-      - chroma_data:/app/chroma_db    # ← worker also needs the vector store
-      - media_data:/app/media         # ← worker reads uploaded resume files
+      - chroma_data:/app/chroma_db    # worker also reads/writes the vector store
+      - media_data:/app/media         # worker reads uploaded resume files
     env_file:
       - .env
     depends_on:
-      - rabbitmq
-      - db
+      db:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
 
-  # ── Adminer  (DB UI) ───────────────────────────────────────────
+  # ── Celery Beat (periodic tasks scheduler) ─────────────────────
+  beat:
+    build: .
+    restart: unless-stopped
+    entrypoint: ["/entrypoint.sh"]
+    command: ["celery", "-A", "config", "beat", "-l", "info", "--scheduler", "django_celery_beat.schedulers:DatabaseScheduler"]
+    volumes:
+      - .:/app
+    env_file:
+      - .env
+    depends_on:
+      db:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+
+  # ── Adminer  (DB UI → http://localhost:8081) ───────────────────
   adminer:
     image: adminer
     container_name: adminer_AI_Resume_Screener
     restart: always
     ports:
       - "8081:8080"
+    depends_on:
+      db:
+        condition: service_healthy
 
 volumes:
   postgres_data:
-  chroma_data:     # ← persists ChromaDB vector store between restarts
-  media_data:      # ← persists uploaded resume files between restarts
+  chroma_data:    # persists ChromaDB vector store between restarts
+  media_data:     # persists uploaded resume files between restarts
+  static_data:    # persists collected static files between restarts

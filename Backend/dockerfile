@@ -48,19 +48,87 @@
 
 
 
-# 1) Base image
+# # 1) Base image
+# FROM python:3.12.7-slim AS runtime
+
+# # 2) Environment
+# ENV PYTHONDONTWRITEBYTECODE=1 \
+#     PYTHONUNBUFFERED=1 \
+#     PIP_NO_CACHE_DIR=1
+
+# # 3) OS packages
+# #    — original: build-essential, libpq-dev, curl, netcat-openbsd
+# #    — added:  libmagic1      (file-type detection for resume uploads)
+# #              poppler-utils  (PDF metadata, used by pdfplumber internally)
+# #              libgl1          (required by PyMuPDF / fitz)
+# RUN apt-get update && apt-get install -y --no-install-recommends \
+#     build-essential \
+#     libpq-dev \
+#     curl \
+#     netcat-openbsd \
+#     libmagic1 \
+#     poppler-utils \
+#     libgl1 \
+#   && rm -rf /var/lib/apt/lists/*
+
+# # 4) Create non-root user
+# RUN useradd -m appuser
+
+# # 5) Workdir
+# WORKDIR /app
+
+# # 6) Dependencies (cached when requirements.txt unchanged)
+# COPY requirements.txt /app/requirements.txt
+# RUN pip install --upgrade pip && pip install -r requirements.txt
+
+# # 7) Pre-download sentence-transformers model at build time
+# #    so workers don't download it on first task run
+# RUN python -c "\
+# from sentence_transformers import SentenceTransformer; \
+# SentenceTransformer('sentence-transformers/all-MiniLM-L6-v2')"
+
+# # 8) App source
+# COPY . /app
+
+# # 9) Create required directories for vector store, media and static
+# #    (also created via docker volume, but needs to exist inside image)
+# RUN mkdir -p /app/chroma_db /app/media /app/static
+
+# # 9) Entrypoint: copy, chmod, and set ownership
+# COPY entrypoint.sh /entrypoint.sh
+# RUN chmod +x /entrypoint.sh \
+#     && chown appuser:appuser /entrypoint.sh \
+#     && chown -R appuser:appuser /app
+
+# # 10) Drop privileges
+# USER appuser
+
+# # 11) Networking
+# EXPOSE 8000
+
+# # 12) Start-up
+# ENTRYPOINT ["/entrypoint.sh"]
+# CMD ["gunicorn", "--bind", "0.0.0.0:8000", "config.wsgi:application"]
+
+
+
+
+# ── Stage: runtime ────────────────────────────────────────────────
 FROM python:3.12.7-slim AS runtime
 
-# 2) Environment
+# ── 1) Environment variables ───────────────────────────────────────
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
     PIP_NO_CACHE_DIR=1
 
-# 3) OS packages
-#    — original: build-essential, libpq-dev, curl, netcat-openbsd
-#    — added:  libmagic1      (file-type detection for resume uploads)
-#              poppler-utils  (PDF metadata, used by pdfplumber internally)
-#              libgl1          (required by PyMuPDF / fitz)
+# ── 2) OS-level packages ───────────────────────────────────────────
+#   build-essential   → compiling C extensions
+#   libpq-dev         → psycopg2
+#   curl              → health checks / downloads
+#   netcat-openbsd    → wait-for-service in entrypoint
+#   libmagic1         → file-type detection for resume uploads
+#   poppler-utils     → PDF metadata (pdfplumber)
+#   libgl1            → PyMuPDF / fitz
 RUN apt-get update && apt-get install -y --no-install-recommends \
     build-essential \
     libpq-dev \
@@ -71,41 +139,42 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libgl1 \
   && rm -rf /var/lib/apt/lists/*
 
-# 4) Create non-root user
+# ── 3) Non-root user ───────────────────────────────────────────────
 RUN useradd -m appuser
 
-# 5) Workdir
+# ── 4) Working directory ───────────────────────────────────────────
 WORKDIR /app
 
-# 6) Dependencies (cached when requirements.txt unchanged)
+# ── 5) Python dependencies (layer cached until requirements.txt changes) ──
 COPY requirements.txt /app/requirements.txt
 RUN pip install --upgrade pip && pip install -r requirements.txt
 
-# 7) Pre-download sentence-transformers model at build time
-#    so workers don't download it on first task run
+# ── 6) Pre-download sentence-transformers model at build time ──────
+#   Avoids cold-start download on the first Celery task
 RUN python -c "\
 from sentence_transformers import SentenceTransformer; \
 SentenceTransformer('sentence-transformers/all-MiniLM-L6-v2')"
 
-# 8) App source
+# ── 7) Copy application source ─────────────────────────────────────
 COPY . /app
 
-# 9) Create required directories for vector store, media and static
-#    (also created via docker volume, but needs to exist inside image)
+# ── 8) Create runtime directories ─────────────────────────────────
+#   Volumes will be mounted here; directories must exist in the image
 RUN mkdir -p /app/chroma_db /app/media /app/static
 
-# 9) Entrypoint: copy, chmod, and set ownership
+# ── 9) Entrypoint setup ────────────────────────────────────────────
 COPY entrypoint.sh /entrypoint.sh
-RUN chmod +x /entrypoint.sh \
-    && chown appuser:appuser /entrypoint.sh \
-    && chown -R appuser:appuser /app
+RUN sed -i 's/\r//' /entrypoint.sh \
+    && chmod +x /entrypoint.sh \
+    && chown -R appuser:appuser /app \
+    && chown appuser:appuser /entrypoint.sh
 
-# 10) Drop privileges
+# ── 10) Drop to non-root ───────────────────────────────────────────
 USER appuser
 
-# 11) Networking
+# ── 11) Expose Django port ─────────────────────────────────────────
 EXPOSE 8000
 
-# 12) Start-up
+# ── 12) Default start-up (overridden by docker-compose command) ────
 ENTRYPOINT ["/entrypoint.sh"]
-CMD ["gunicorn", "--bind", "0.0.0.0:8000", "config.wsgi:application"]
+CMD ["gunicorn", "--bind", "0.0.0.0:8000", "--workers", "3", "--timeout", "120", "config.wsgi:application"]
