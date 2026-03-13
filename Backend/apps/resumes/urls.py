@@ -20,7 +20,7 @@ urlpatterns = [
     path('v1/resume/skills/',               ResumeSkillView.as_view(),            name='resume-skills'),
 
     # ─── Bulk upload  POST  (multipart, up to 100 files)
-    path('v1/resume/bulk-upload/',          ResumeBulkUploadView.as_view(),       name='resume-bulk-upload'),
+    path('v1/resume/bulk/upload/',          ResumeBulkUploadView.as_view(),       name='resume-bulk-upload'),
 
     # ─── Bulk upload session status  GET  ?session_id=<uuid>
     path('v1/resume/bulk-upload/status/',   ResumeBulkUploadStatusView.as_view(), name='resume-bulk-upload-status'),

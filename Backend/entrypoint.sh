@@ -117,65 +117,130 @@
 
 
 
-#!/bin/sh
+# #!/bin/sh
 
+# set -e
+
+# # ── Helper: wait for a TCP service to be ready ────────────────────
+# wait_for_service() {
+#     local host=$1
+#     local port=$2
+#     local name=$3
+
+#     echo "👉 Waiting for $name at $host:$port..."
+#     until nc -z "$host" "$port"; do
+#         echo "   $name is unavailable — sleeping 5s"
+#         sleep 5
+#     done
+#     echo "✅ $name is up!"
+# }
+
+# # ── Detect what process is being launched ─────────────────────────
+# FIRST_ARG="${1:-}"
+
+# # ── Always wait for PostgreSQL ────────────────────────────────────
+# wait_for_service db 5432 "PostgreSQL"
+
+# # ── Wait for RabbitMQ when launching web, worker, or beat ─────────
+# case "$FIRST_ARG" in
+#     gunicorn|celery|python)
+#         wait_for_service rabbitmq 5672 "RabbitMQ"
+#         ;;
+# esac
+
+# # ── Migrations + one-off setup for the web (gunicorn) container ───
+# if [ "$FIRST_ARG" = "gunicorn" ]; then
+#     echo "👉 Running migrations..."
+#     python manage.py makemigrations --noinput
+#     python manage.py migrate --noinput
+
+#     echo "👉 Collecting static files..."
+#     python manage.py collectstatic --noinput
+
+#     mkdir -p /app/chroma_db
+
+#     echo "👉 Running optional setup scripts..."
+#     [ -f script_permissions.py ] && python script_permissions.py
+#     [ -f script_populate.py ]    && python script_populate.py
+# fi
+
+# # ── Migrations for local runserver (dev only) ─────────────────────
+# if [ "$FIRST_ARG" = "python" ] && [ "${2:-}" = "manage.py" ] && [ "${3:-}" = "runserver" ]; then
+#     echo "👉 Running migrations (runserver)..."
+#     python manage.py makemigrations --noinput
+#     python manage.py migrate --noinput
+
+#     mkdir -p /app/chroma_db
+
+#     echo "👉 Running optional setup scripts..."
+#     [ -f script_permissions.py ] && python script_permissions.py
+#     [ -f script_populate.py ]    && python script_populate.py
+# fi
+
+# echo "🚀 Starting: $@"
+# exec "$@"
+
+
+
+
+#!/bin/sh
 set -e
 
-# ── Helper: wait for a TCP service to be ready ────────────────────
+# Helper: wait for a TCP service to be ready
 wait_for_service() {
-    local host=$1
-    local port=$2
-    local name=$3
-
-    echo "👉 Waiting for $name at $host:$port..."
-    until nc -z "$host" "$port"; do
+    host=$1
+    port=$2
+    name=$3
+    
+    echo "Waiting for $name at $host:$port..."
+    while ! nc -z "$host" "$port"; do
         echo "   $name is unavailable — sleeping 5s"
         sleep 5
     done
-    echo "✅ $name is up!"
+    echo "$name is up!"
 }
 
-# ── Detect what process is being launched ─────────────────────────
+# Detect what process is being launched
 FIRST_ARG="${1:-}"
 
-# ── Always wait for PostgreSQL ────────────────────────────────────
+# Always wait for PostgreSQL
 wait_for_service db 5432 "PostgreSQL"
 
-# ── Wait for RabbitMQ when launching web, worker, or beat ─────────
+# Wait for RabbitMQ when launching web, worker, or beat
 case "$FIRST_ARG" in
     gunicorn|celery|python)
         wait_for_service rabbitmq 5672 "RabbitMQ"
         ;;
 esac
 
-# ── Migrations + one-off setup for the web (gunicorn) container ───
+# Migrations + one-off setup for the web (gunicorn) container
 if [ "$FIRST_ARG" = "gunicorn" ]; then
-    echo "👉 Running migrations..."
+    echo "Running migrations..."
     python manage.py makemigrations --noinput
     python manage.py migrate --noinput
-
-    echo "👉 Collecting static files..."
+    
+    echo "Collecting static files..."
     python manage.py collectstatic --noinput
-
+    
     mkdir -p /app/chroma_db
-
-    echo "👉 Running optional setup scripts..."
+    
+    echo "Running optional setup scripts..."
     [ -f script_permissions.py ] && python script_permissions.py
-    [ -f script_populate.py ]    && python script_populate.py
+    [ -f script_populate.py ] && python script_populate.py
 fi
 
-# ── Migrations for local runserver (dev only) ─────────────────────
+# Migrations for local runserver (dev only)
 if [ "$FIRST_ARG" = "python" ] && [ "${2:-}" = "manage.py" ] && [ "${3:-}" = "runserver" ]; then
-    echo "👉 Running migrations (runserver)..."
+    echo "Running migrations (runserver)..."
     python manage.py makemigrations --noinput
     python manage.py migrate --noinput
-
+    
     mkdir -p /app/chroma_db
-
-    echo "👉 Running optional setup scripts..."
+    
+    echo "Running optional setup scripts..."
     [ -f script_permissions.py ] && python script_permissions.py
-    [ -f script_populate.py ]    && python script_populate.py
+    [ -f script_populate.py ] && python script_populate.py
 fi
 
-echo "🚀 Starting: $@"
+echo "Starting: $@"
 exec "$@"

@@ -162,12 +162,21 @@ COPY . /app
 #   Volumes will be mounted here; directories must exist in the image
 RUN mkdir -p /app/chroma_db /app/media /app/static
 
+# # ── 9) Entrypoint setup ────────────────────────────────────────────
+# COPY entrypoint.sh /entrypoint.sh
+# RUN sed -i 's/\r//' /entrypoint.sh \
+#     && chmod +x /entrypoint.sh \
+#     && chown -R appuser:appuser /app \
+#     && chown appuser:appuser /entrypoint.sh
+
 # ── 9) Entrypoint setup ────────────────────────────────────────────
 COPY entrypoint.sh /entrypoint.sh
-RUN sed -i 's/\r//' /entrypoint.sh \
-    && chmod +x /entrypoint.sh \
-    && chown -R appuser:appuser /app \
-    && chown appuser:appuser /entrypoint.sh
+RUN apt-get update && apt-get install -y dos2unix && \
+    dos2unix /entrypoint.sh && \
+    chmod +x /entrypoint.sh && \
+    chown -R appuser:appuser /app && \
+    chown appuser:appuser /entrypoint.sh && \
+    apt-get remove -y dos2unix && apt-get autoremove -y
 
 # ── 10) Drop to non-root ───────────────────────────────────────────
 USER appuser
