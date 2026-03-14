@@ -113,8 +113,87 @@
 
 
 
+# # ── Stage: runtime ────────────────────────────────────────────────
+# FROM python:3.12.7-slim AS runtime
+
+# # ── 1) Environment variables ───────────────────────────────────────
+# ENV PYTHONDONTWRITEBYTECODE=1 \
+#     PYTHONUNBUFFERED=1 \
+#     PIP_NO_CACHE_DIR=1
+
+# # ── 2) OS-level packages ───────────────────────────────────────────
+# #   build-essential   → compiling C extensions
+# #   libpq-dev         → psycopg2
+# #   curl              → health checks / downloads
+# #   netcat-openbsd    → wait-for-service in entrypoint
+# #   libmagic1         → file-type detection for resume uploads
+# #   poppler-utils     → PDF metadata (pdfplumber)
+# #   libgl1            → PyMuPDF / fitz
+# RUN apt-get update && apt-get install -y --no-install-recommends \
+#     build-essential \
+#     libpq-dev \
+#     curl \
+#     netcat-openbsd \
+#     libmagic1 \
+#     poppler-utils \
+#     libgl1 \
+#   && rm -rf /var/lib/apt/lists/*
+
+# # ── 3) Non-root user ───────────────────────────────────────────────
+# RUN useradd -m appuser
+
+# # ── 4) Working directory ───────────────────────────────────────────
+# WORKDIR /app
+
+# # ── 5) Python dependencies (layer cached until requirements.txt changes) ──
+# COPY requirements.txt /app/requirements.txt
+# RUN pip install --upgrade pip && pip install -r requirements.txt
+
+# # ── 6) Pre-download sentence-transformers model at build time ──────
+# #   Avoids cold-start download on the first Celery task
+# RUN python -c "\
+# from sentence_transformers import SentenceTransformer; \
+# SentenceTransformer('sentence-transformers/all-MiniLM-L6-v2')"
+
+# # ── 7) Copy application source ─────────────────────────────────────
+# COPY . /app
+
+# # ── 8) Create runtime directories ─────────────────────────────────
+# #   Volumes will be mounted here; directories must exist in the image
+# RUN mkdir -p /app/chroma_db /app/media /app/static
+
+# # # ── 9) Entrypoint setup ────────────────────────────────────────────
+# # COPY entrypoint.sh /entrypoint.sh
+# # RUN sed -i 's/\r//' /entrypoint.sh \
+# #     && chmod +x /entrypoint.sh \
+# #     && chown -R appuser:appuser /app \
+# #     && chown appuser:appuser /entrypoint.sh
+
+# # ── 9) Entrypoint setup ────────────────────────────────────────────
+# COPY entrypoint.sh /entrypoint.sh
+# RUN apt-get update && apt-get install -y dos2unix && \
+#     dos2unix /entrypoint.sh && \
+#     chmod +x /entrypoint.sh && \
+#     chown -R appuser:appuser /app && \
+#     chown appuser:appuser /entrypoint.sh && \
+#     apt-get remove -y dos2unix && apt-get autoremove -y
+
+# # ── 10) Drop to non-root ───────────────────────────────────────────
+# USER appuser
+
+# # ── 11) Expose Django port ─────────────────────────────────────────
+# EXPOSE 8000
+
+# # ── 12) Default start-up (overridden by docker-compose command) ────
+# ENTRYPOINT ["/entrypoint.sh"]
+# CMD ["gunicorn", "--bind", "0.0.0.0:8000", "--workers", "3", "--timeout", "120", "config.wsgi:application"]
+
+
+
+
+
 # ── Stage: runtime ────────────────────────────────────────────────
-FROM python:3.12.7-slim AS runtime
+FROM python:3.12-slim AS runtime
 
 # ── 1) Environment variables ───────────────────────────────────────
 ENV PYTHONDONTWRITEBYTECODE=1 \
@@ -122,13 +201,6 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     PIP_NO_CACHE_DIR=1
 
 # ── 2) OS-level packages ───────────────────────────────────────────
-#   build-essential   → compiling C extensions
-#   libpq-dev         → psycopg2
-#   curl              → health checks / downloads
-#   netcat-openbsd    → wait-for-service in entrypoint
-#   libmagic1         → file-type detection for resume uploads
-#   poppler-utils     → PDF metadata (pdfplumber)
-#   libgl1            → PyMuPDF / fitz
 RUN apt-get update && apt-get install -y --no-install-recommends \
     build-essential \
     libpq-dev \
@@ -137,6 +209,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libmagic1 \
     poppler-utils \
     libgl1 \
+    dos2unix \
   && rm -rf /var/lib/apt/lists/*
 
 # ── 3) Non-root user ───────────────────────────────────────────────
@@ -145,45 +218,29 @@ RUN useradd -m appuser
 # ── 4) Working directory ───────────────────────────────────────────
 WORKDIR /app
 
-# ── 5) Python dependencies (layer cached until requirements.txt changes) ──
+# ── 5) Python dependencies ─────────────────────────────────────────
 COPY requirements.txt /app/requirements.txt
 RUN pip install --upgrade pip && pip install -r requirements.txt
 
-# ── 6) Pre-download sentence-transformers model at build time ──────
-#   Avoids cold-start download on the first Celery task
-RUN python -c "\
-from sentence_transformers import SentenceTransformer; \
-SentenceTransformer('sentence-transformers/all-MiniLM-L6-v2')"
-
-# ── 7) Copy application source ─────────────────────────────────────
+# ── 6) Copy application source ─────────────────────────────────────
 COPY . /app
 
-# ── 8) Create runtime directories ─────────────────────────────────
-#   Volumes will be mounted here; directories must exist in the image
+# ── 7) Create runtime directories ─────────────────────────────────
 RUN mkdir -p /app/chroma_db /app/media /app/static
 
-# # ── 9) Entrypoint setup ────────────────────────────────────────────
-# COPY entrypoint.sh /entrypoint.sh
-# RUN sed -i 's/\r//' /entrypoint.sh \
-#     && chmod +x /entrypoint.sh \
-#     && chown -R appuser:appuser /app \
-#     && chown appuser:appuser /entrypoint.sh
-
-# ── 9) Entrypoint setup ────────────────────────────────────────────
+# ── 8) Entrypoint: strip Windows CRLF + set permissions ───────────
 COPY entrypoint.sh /entrypoint.sh
-RUN apt-get update && apt-get install -y dos2unix && \
-    dos2unix /entrypoint.sh && \
-    chmod +x /entrypoint.sh && \
-    chown -R appuser:appuser /app && \
-    chown appuser:appuser /entrypoint.sh && \
-    apt-get remove -y dos2unix && apt-get autoremove -y
+RUN dos2unix /entrypoint.sh \
+    && chmod +x /entrypoint.sh \
+    && chown -R appuser:appuser /app \
+    && chown appuser:appuser /entrypoint.sh
 
-# ── 10) Drop to non-root ───────────────────────────────────────────
+# ── 9) Drop to non-root ────────────────────────────────────────────
 USER appuser
 
-# ── 11) Expose Django port ─────────────────────────────────────────
+# ── 10) Expose Django port ─────────────────────────────────────────
 EXPOSE 8000
 
-# ── 12) Default start-up (overridden by docker-compose command) ────
+# ── 11) Default start-up ──────────────────────────────────────────
 ENTRYPOINT ["/entrypoint.sh"]
 CMD ["gunicorn", "--bind", "0.0.0.0:8000", "--workers", "3", "--timeout", "120", "config.wsgi:application"]

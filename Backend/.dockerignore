@@ -1,40 +1,110 @@
-# Ignore Python cache & compiled files
+# # Ignore Python cache & compiled files
+# __pycache__/
+# *.pyc
+# *.pyo
+# *.pyd
+
+# # Ignore virtual environments
+# venv/
+# env/
+# .venv/
+# venv2
+# venv2/
+
+# # Ignore IDE/editor settings
+# .idea/
+# .vscode/
+# *.swp
+
+# # Ignore system files
+# .DS_Store
+# Thumbs.db
+
+# # Ignore logs & coverage
+# *.log
+# *.pot
+# *.mo
+# *.sqlite3
+# coverage/
+# htmlcov/
+
+# # Ignore local media/static if generated
+# /media/
+# staticfiles/
+
+# # Ignore build and cache artifacts
+# build/
+# dist/
+# *.egg-info
+
+# my_mig.bat
+
+
+
+
+# ── Python cache & compiled files ─────────────────────────────────
 __pycache__/
+**/__pycache__/
 *.pyc
 *.pyo
 *.pyd
 
-# Ignore virtual environments
+# ── Virtual environments ───────────────────────────────────────────
 venv/
 env/
 .venv/
-venv2
 venv2/
 
-# Ignore IDE/editor settings
+# ── IDE / editor ──────────────────────────────────────────────────
 .idea/
 .vscode/
 *.swp
 
-# Ignore system files
+# ── OS files ──────────────────────────────────────────────────────
 .DS_Store
 Thumbs.db
 
-# Ignore logs & coverage
+# ── Logs & coverage ───────────────────────────────────────────────
 *.log
 *.pot
 *.mo
 *.sqlite3
 coverage/
 htmlcov/
+.coverage
+.pytest_cache/
 
-# Ignore local media/static if generated
+# ── Django generated ──────────────────────────────────────────────
 /media/
+/static/
 staticfiles/
 
-# Ignore build and cache artifacts
+# ── Build & dist artifacts ────────────────────────────────────────
 build/
 dist/
-*.egg-info
+*.egg-info/
 
+# ── Git ───────────────────────────────────────────────────────────
+.git/
+.gitignore
+.gitattributes
+
+# ── Docker files (no need to copy into image) ─────────────────────
+Dockerfile
+docker-compose.yml
+.dockerignore
+
+# ── ChromaDB vector store (mounted as Docker volume) ──────────────
+chroma_db/
+
+# ── Node (if any frontend assets) ─────────────────────────────────
+node_modules/
+
+# ── Windows batch scripts ─────────────────────────────────────────
+*.bat
 my_mig.bat
+
+# ── Environment secrets (never bake into image) ───────────────────
+.env
+.env.*
+!.env.example
