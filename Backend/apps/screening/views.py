@@ -29,15 +29,10 @@
 
 
 # # ─────────────────────────────────────────────────────────
-# #  Scope helpers  (mirror _scope_filters from jobs/resumes)
+# #  Scope helpers
 # # ─────────────────────────────────────────────────────────
 # def _scope_sessions(user):
-#     """
-#     Keyword filters for ScreeningSession scoped to user's company.
-#     Super admins see all sessions. Recruiters see only their own.
-#     Note: always combine with an explicit queryset filter at call site.
-#     """
-#     if getattr(user, 'role', None) == 1:          # Super Admin
+#     if getattr(user, 'role', None) == 1:
 #         return {}
 #     company = getattr(user, 'company', None)
 #     if not company:
@@ -49,9 +44,6 @@
 
 
 # def _scope_results(user):
-#     """
-#     Keyword filters for ScreeningResult scoped to user's company.
-#     """
 #     if getattr(user, 'role', None) == 1:
 #         return {}
 #     company = getattr(user, 'company', None)
@@ -65,15 +57,16 @@
 
 # # ─────────────────────────────────────────────────────────
 # #  Sessions   →   /api/screening/v1/session/
-# #  GET              → paginated list
-# #  GET  ?id=<uuid>  → single detail
-# #  DELETE ?id=<uuid>→ delete session
 # # ─────────────────────────────────────────────────────────
 # @extend_schema(tags=['screening'])
 # class ScreeningSessionView(BaseView):
 #     permission_classes = (IsAuthenticated,)
 #     serializer_class   = ScreeningSessionListSerializer
 #     filterset_class    = ScreeningSessionFilter
+#     # ↓ Explicit queryset prevents BaseView from injecting deleted=False
+#     queryset = ScreeningSession.objects.select_related(
+#         'job', 'initiated_by', 'company'
+#     ).prefetch_related('results')
 
 #     @extend_schema(summary='List screening sessions')
 #     @permission_required([SHOW_SCREENING])
@@ -83,9 +76,9 @@
 
 #         if session_id:
 #             try:
-#                 instance = ScreeningSession.objects.filter(
+#                 instance = self.queryset.filter(
 #                     **self.extra_filters
-#                 ).select_related('job', 'initiated_by', 'company').prefetch_related('results').get(id=session_id)
+#                 ).get(id=session_id)
 #                 serializer = ScreeningSessionDetailSerializer(instance, context={'request': request})
 #                 return Response(create_response(SUCCESSFUL, serializer.data), status=status.HTTP_200_OK)
 #             except ScreeningSession.DoesNotExist:
@@ -125,7 +118,6 @@
 
 # # ─────────────────────────────────────────────────────────
 # #  Start Screening   →   /api/screening/v1/session/start/
-# #  POST
 # # ─────────────────────────────────────────────────────────
 # @extend_schema(tags=['screening'])
 # class StartScreeningView(BaseView):
@@ -165,6 +157,7 @@
 #                 for r in resumes
 #             ])
 
+#             task_id = None
 #             try:
 #                 from apps.core.tasks import run_screening_session_task
 #                 task = run_screening_session_task.delay(str(session.id))
@@ -173,7 +166,6 @@
 #                 task_id = task.id
 #             except ImportError:
 #                 logger.warning('run_screening_session_task not available')
-#                 task_id = None
 
 #             job.screening_count += 1
 #             job.save(update_fields=['screening_count'])
@@ -200,14 +192,16 @@
 
 # # ─────────────────────────────────────────────────────────
 # #  Results   →   /api/screening/v1/result/
-# #  GET              → paginated list
-# #  GET  ?id=<uuid>  → full detail
 # # ─────────────────────────────────────────────────────────
 # @extend_schema(tags=['screening'])
 # class ScreeningResultView(BaseView):
 #     permission_classes = (IsAuthenticated,)
 #     serializer_class   = ScreeningResultListSerializer
 #     filterset_class    = ScreeningResultFilter
+#     # ↓ Explicit queryset prevents BaseView from injecting deleted=False
+#     queryset = ScreeningResult.objects.select_related(
+#         'resume', 'job', 'session', 'reviewed_by'
+#     ).prefetch_related('agent_logs')
 
 #     @extend_schema(summary='List or retrieve screening results')
 #     @permission_required([READ_SCREENING])
@@ -217,9 +211,9 @@
 
 #         if result_id:
 #             try:
-#                 instance = ScreeningResult.objects.filter(
+#                 instance = self.queryset.filter(
 #                     **self.extra_filters
-#                 ).select_related('resume', 'job', 'session', 'reviewed_by').prefetch_related('agent_logs').get(id=result_id)
+#                 ).get(id=result_id)
 #                 serializer = ScreeningResultDetailSerializer(instance, context={'request': request})
 #                 return Response(create_response(SUCCESSFUL, serializer.data), status=status.HTTP_200_OK)
 #             except ScreeningResult.DoesNotExist:
@@ -230,7 +224,6 @@
 
 # # ─────────────────────────────────────────────────────────
 # #  Human Decision   →   /api/screening/v1/result/decision/
-# #  PATCH ?id=<uuid>
 # # ─────────────────────────────────────────────────────────
 # @extend_schema(tags=['screening'])
 # class HumanDecisionView(BaseView):
@@ -255,6 +248,8 @@
 #                 return Response(create_response(serializer.errors), status=status.HTTP_400_BAD_REQUEST)
 
 #             serializer.save()
+#             # Re-fetch to get fresh data after save
+#             result.refresh_from_db()
 #             return Response(
 #                 create_response(SUCCESSFUL, ScreeningResultListSerializer(result).data),
 #                 status=status.HTTP_200_OK,
@@ -267,7 +262,6 @@
 
 # # ─────────────────────────────────────────────────────────
 # #  Agent Logs   →   /api/screening/v1/result/agent-logs/
-# #  GET ?id=<result_uuid>
 # # ─────────────────────────────────────────────────────────
 # @extend_schema(tags=['screening'])
 # class AgentLogsView(BaseView):
@@ -287,7 +281,9 @@
 #             if not result:
 #                 return Response(create_response(NOT_FOUND), status=status.HTTP_404_NOT_FOUND)
 
-#             logs = AgentExecutionLog.objects.filter(screening_result=result).order_by('created_at')
+#             logs = AgentExecutionLog.objects.filter(
+#                 screening_result=result
+#             ).order_by('created_at')
 #             data = AgentLogSerializer(logs, many=True).data
 #             return Response(create_response(SUCCESSFUL, data), status=status.HTTP_200_OK)
 
@@ -298,7 +294,6 @@
 
 # # ─────────────────────────────────────────────────────────
 # #  Compare Candidates   →   /api/screening/v1/compare/
-# #  POST  body: {"result_ids": [...]}
 # # ─────────────────────────────────────────────────────────
 # @extend_schema(tags=['screening'])
 # class CompareCandidatesView(BaseView):
@@ -369,7 +364,6 @@
 
 # # ─────────────────────────────────────────────────────────
 # #  Analytics   →   /api/screening/v1/analytics/
-# #  GET
 # # ─────────────────────────────────────────────────────────
 # @extend_schema(tags=['screening'])
 # class ScreeningAnalyticsView(BaseView):
@@ -381,9 +375,9 @@
 #     def get(self, request):
 #         try:
 #             from django.db.models import Count, Sum
-#             session_filters = _scope_sessions(request.user)
-#             result_filters  = _scope_results(request.user)
 
+#             session_filters   = _scope_sessions(request.user)
+#             result_filters    = _scope_results(request.user)
 #             sessions          = ScreeningSession.objects.filter(**session_filters)
 #             results           = ScreeningResult.objects.filter(**result_filters)
 #             completed_results = results.filter(status=ScreeningStatus.COMPLETED)
@@ -432,7 +426,6 @@
 
 # # ─────────────────────────────────────────────────────────
 # #  Stats   →   /api/screening/v1/stats/
-# #  GET  (lighter summary — mirrors JobStatsView / ResumeStatsView)
 # # ─────────────────────────────────────────────────────────
 # @extend_schema(tags=['screening'])
 # class ScreeningStatsView(BaseView):
@@ -448,8 +441,8 @@
 #             results         = ScreeningResult.objects.filter(**_scope_results(request.user))
 
 #             data = {
-#                 'total_sessions':   sessions.count(),
-#                 'total_results':    results.count(),
+#                 'total_sessions':    sessions.count(),
+#                 'total_results':     results.count(),
 #                 'by_session_status': {s: sessions.filter(status=s).count() for s in ScreeningStatus.values},
 #                 'by_result_status':  {s: results.filter(status=s).count()  for s in ScreeningStatus.values},
 #             }
@@ -462,8 +455,11 @@
 
 
 
+
+
+
 import logging
-from django.db.models import Avg
+from django.db.models import Avg, Count, Sum
 from django.utils import timezone
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
@@ -493,10 +489,11 @@ logger = logging.getLogger(__name__)
 
 
 # ─────────────────────────────────────────────────────────
-#  Scope helpers
+#  Scope helpers  (mirrors _scope_filters from jobs)
 # ─────────────────────────────────────────────────────────
 def _scope_sessions(user):
-    if getattr(user, 'role', None) == 1:
+    """Returns queryset keyword filters scoped to the user's company."""
+    if getattr(user, 'role', None) == 1:   # Super Admin sees all
         return {}
     company = getattr(user, 'company', None)
     if not company:
@@ -508,6 +505,7 @@ def _scope_sessions(user):
 
 
 def _scope_results(user):
+    """Returns queryset keyword filters for ScreeningResult scoped to the user's company."""
     if getattr(user, 'role', None) == 1:
         return {}
     company = getattr(user, 'company', None)
@@ -521,18 +519,15 @@ def _scope_results(user):
 
 # ─────────────────────────────────────────────────────────
 #  Sessions   →   /api/screening/v1/session/
+#  GET list / GET detail ?id= / DELETE ?id=
 # ─────────────────────────────────────────────────────────
 @extend_schema(tags=['screening'])
 class ScreeningSessionView(BaseView):
     permission_classes = (IsAuthenticated,)
     serializer_class   = ScreeningSessionListSerializer
     filterset_class    = ScreeningSessionFilter
-    # ↓ Explicit queryset prevents BaseView from injecting deleted=False
-    queryset = ScreeningSession.objects.select_related(
-        'job', 'initiated_by', 'company'
-    ).prefetch_related('results')
 
-    @extend_schema(summary='List screening sessions')
+    @extend_schema(summary='List or retrieve screening sessions')
     @permission_required([SHOW_SCREENING])
     def get(self, request):
         session_id = request.query_params.get('id')
@@ -540,9 +535,9 @@ class ScreeningSessionView(BaseView):
 
         if session_id:
             try:
-                instance = self.queryset.filter(
-                    **self.extra_filters
-                ).get(id=session_id)
+                instance = ScreeningSession.objects.filter(
+                    deleted=False, id=session_id, **self.extra_filters
+                ).select_related('job', 'initiated_by', 'company').prefetch_related('results').get()
                 serializer = ScreeningSessionDetailSerializer(instance, context={'request': request})
                 return Response(create_response(SUCCESSFUL, serializer.data), status=status.HTTP_200_OK)
             except ScreeningSession.DoesNotExist:
@@ -550,7 +545,7 @@ class ScreeningSessionView(BaseView):
 
         return super().get_(request)
 
-    @extend_schema(summary='Delete a screening session')
+    @extend_schema(summary='Soft-delete a screening session')
     @permission_required([DELETE_SCREENING])
     def delete(self, request):
         try:
@@ -559,7 +554,7 @@ class ScreeningSessionView(BaseView):
                 return Response(create_response(ID_NOT_PROVIDED), status=status.HTTP_400_BAD_REQUEST)
 
             extra    = _scope_sessions(request.user)
-            instance = ScreeningSession.objects.filter(id=session_id, **extra).first()
+            instance = ScreeningSession.objects.filter(deleted=False, id=session_id, **extra).first()
             if not instance:
                 return Response(create_response(NOT_FOUND), status=status.HTTP_404_NOT_FOUND)
 
@@ -569,7 +564,7 @@ class ScreeningSessionView(BaseView):
                     status=status.HTTP_409_CONFLICT,
                 )
 
-            instance.delete()
+            instance.soft_delete(user=request.user)
             return Response(
                 create_response(SUCCESSFUL, {'id': str(session_id), 'message': 'Session deleted.'}),
                 status=status.HTTP_200_OK,
@@ -582,6 +577,7 @@ class ScreeningSessionView(BaseView):
 
 # ─────────────────────────────────────────────────────────
 #  Start Screening   →   /api/screening/v1/session/start/
+#  POST
 # ─────────────────────────────────────────────────────────
 @extend_schema(tags=['screening'])
 class StartScreeningView(BaseView):
@@ -610,6 +606,7 @@ class StartScreeningView(BaseView):
                 job              = job,
                 company          = company,
                 initiated_by     = request.user,
+                created_by       = request.user,
                 total_resumes    = resumes.count(),
                 pass_threshold   = serializer.validated_data['pass_threshold'],
                 top_n_candidates = serializer.validated_data['top_n_candidates'],
@@ -629,7 +626,7 @@ class StartScreeningView(BaseView):
                 session.save(update_fields=['task_id'])
                 task_id = task.id
             except ImportError:
-                logger.warning('run_screening_session_task not available')
+                logger.warning('run_screening_session_task not available — running synchronously skipped.')
 
             job.screening_count += 1
             job.save(update_fields=['screening_count'])
@@ -656,16 +653,13 @@ class StartScreeningView(BaseView):
 
 # ─────────────────────────────────────────────────────────
 #  Results   →   /api/screening/v1/result/
+#  GET list / GET detail ?id=
 # ─────────────────────────────────────────────────────────
 @extend_schema(tags=['screening'])
 class ScreeningResultView(BaseView):
     permission_classes = (IsAuthenticated,)
     serializer_class   = ScreeningResultListSerializer
     filterset_class    = ScreeningResultFilter
-    # ↓ Explicit queryset prevents BaseView from injecting deleted=False
-    queryset = ScreeningResult.objects.select_related(
-        'resume', 'job', 'session', 'reviewed_by'
-    ).prefetch_related('agent_logs')
 
     @extend_schema(summary='List or retrieve screening results')
     @permission_required([READ_SCREENING])
@@ -675,9 +669,9 @@ class ScreeningResultView(BaseView):
 
         if result_id:
             try:
-                instance = self.queryset.filter(
-                    **self.extra_filters
-                ).get(id=result_id)
+                instance = ScreeningResult.objects.filter(
+                    deleted=False, id=result_id, **self.extra_filters
+                ).select_related('resume', 'job', 'session', 'reviewed_by').prefetch_related('agent_logs').get()
                 serializer = ScreeningResultDetailSerializer(instance, context={'request': request})
                 return Response(create_response(SUCCESSFUL, serializer.data), status=status.HTTP_200_OK)
             except ScreeningResult.DoesNotExist:
@@ -688,13 +682,14 @@ class ScreeningResultView(BaseView):
 
 # ─────────────────────────────────────────────────────────
 #  Human Decision   →   /api/screening/v1/result/decision/
+#  PATCH ?id=<uuid>
 # ─────────────────────────────────────────────────────────
 @extend_schema(tags=['screening'])
 class HumanDecisionView(BaseView):
     permission_classes = (IsAuthenticated,)
     serializer_class   = HumanDecisionSerializer
 
-    @extend_schema(summary='Submit HR decision on a candidate result')
+    @extend_schema(summary='Submit HR decision on a screening result')
     @permission_required([DECIDE_SCREENING])
     def patch(self, request):
         try:
@@ -703,7 +698,7 @@ class HumanDecisionView(BaseView):
                 return Response(create_response(ID_NOT_PROVIDED), status=status.HTTP_400_BAD_REQUEST)
 
             extra  = _scope_results(request.user)
-            result = ScreeningResult.objects.filter(id=result_id, **extra).first()
+            result = ScreeningResult.objects.filter(deleted=False, id=result_id, **extra).first()
             if not result:
                 return Response(create_response(NOT_FOUND), status=status.HTTP_404_NOT_FOUND)
 
@@ -712,7 +707,6 @@ class HumanDecisionView(BaseView):
                 return Response(create_response(serializer.errors), status=status.HTTP_400_BAD_REQUEST)
 
             serializer.save()
-            # Re-fetch to get fresh data after save
             result.refresh_from_db()
             return Response(
                 create_response(SUCCESSFUL, ScreeningResultListSerializer(result).data),
@@ -726,6 +720,7 @@ class HumanDecisionView(BaseView):
 
 # ─────────────────────────────────────────────────────────
 #  Agent Logs   →   /api/screening/v1/result/agent-logs/
+#  GET ?id=<result_uuid>
 # ─────────────────────────────────────────────────────────
 @extend_schema(tags=['screening'])
 class AgentLogsView(BaseView):
@@ -741,15 +736,17 @@ class AgentLogsView(BaseView):
                 return Response(create_response(ID_NOT_PROVIDED), status=status.HTTP_400_BAD_REQUEST)
 
             extra  = _scope_results(request.user)
-            result = ScreeningResult.objects.filter(id=result_id, **extra).first()
+            result = ScreeningResult.objects.filter(deleted=False, id=result_id, **extra).first()
             if not result:
                 return Response(create_response(NOT_FOUND), status=status.HTTP_404_NOT_FOUND)
 
             logs = AgentExecutionLog.objects.filter(
-                screening_result=result
+                deleted=False, screening_result=result
             ).order_by('created_at')
-            data = AgentLogSerializer(logs, many=True).data
-            return Response(create_response(SUCCESSFUL, data), status=status.HTTP_200_OK)
+            return Response(
+                create_response(SUCCESSFUL, AgentLogSerializer(logs, many=True).data),
+                status=status.HTTP_200_OK,
+            )
 
         except Exception as e:
             logger.exception('AgentLogsView.get error: %s', e)
@@ -758,6 +755,7 @@ class AgentLogsView(BaseView):
 
 # ─────────────────────────────────────────────────────────
 #  Compare Candidates   →   /api/screening/v1/compare/
+#  POST  body: {"result_ids": [...]}
 # ─────────────────────────────────────────────────────────
 @extend_schema(tags=['screening'])
 class CompareCandidatesView(BaseView):
@@ -775,6 +773,7 @@ class CompareCandidatesView(BaseView):
             ids     = serializer.validated_data['result_ids']
             extra   = _scope_results(request.user)
             results = ScreeningResult.objects.filter(
+                deleted=False,
                 id__in=ids,
                 status=ScreeningStatus.COMPLETED,
                 **extra,
@@ -828,22 +827,19 @@ class CompareCandidatesView(BaseView):
 
 # ─────────────────────────────────────────────────────────
 #  Analytics   →   /api/screening/v1/analytics/
+#  GET
 # ─────────────────────────────────────────────────────────
 @extend_schema(tags=['screening'])
 class ScreeningAnalyticsView(BaseView):
     permission_classes = (IsAuthenticated,)
     serializer_class   = ScreeningSessionListSerializer
 
-    @extend_schema(summary='Screening analytics dashboard for the company')
+    @extend_schema(summary='Screening analytics dashboard')
     @permission_required([ANALYTICS_SCREENING])
     def get(self, request):
         try:
-            from django.db.models import Count, Sum
-
-            session_filters   = _scope_sessions(request.user)
-            result_filters    = _scope_results(request.user)
-            sessions          = ScreeningSession.objects.filter(**session_filters)
-            results           = ScreeningResult.objects.filter(**result_filters)
+            sessions          = ScreeningSession.objects.filter(deleted=False, **_scope_sessions(request.user))
+            results           = ScreeningResult.objects.filter(deleted=False, **_scope_results(request.user))
             completed_results = results.filter(status=ScreeningStatus.COMPLETED)
 
             data = {
@@ -861,14 +857,14 @@ class ScreeningAnalyticsView(BaseView):
                     'avg_exp_score':   round(completed_results.aggregate(a=Avg('experience_score'))['a'] or 0, 2),
                     'by_ai_decision': {
                         d: completed_results.filter(ai_decision=d).count()
-                        for d in ['shortlisted', 'interview', 'maybe', 'hold', 'rejected']
+                        for d in CandidateDecision.values
                     },
                 },
                 'human_decisions': {
                     'total_reviewed': results.exclude(human_decision='').count(),
                     'by_decision': {
                         d: results.filter(human_decision=d).count()
-                        for d in ['shortlisted', 'interview', 'maybe', 'hold', 'rejected']
+                        for d in CandidateDecision.values
                     },
                 },
                 'cost': {
@@ -890,6 +886,7 @@ class ScreeningAnalyticsView(BaseView):
 
 # ─────────────────────────────────────────────────────────
 #  Stats   →   /api/screening/v1/stats/
+#  GET  — mirrors JobStatsView
 # ─────────────────────────────────────────────────────────
 @extend_schema(tags=['screening'])
 class ScreeningStatsView(BaseView):
@@ -900,9 +897,8 @@ class ScreeningStatsView(BaseView):
     @permission_required([STATS_SCREENING])
     def get(self, request):
         try:
-            session_filters = _scope_sessions(request.user)
-            sessions        = ScreeningSession.objects.filter(**session_filters)
-            results         = ScreeningResult.objects.filter(**_scope_results(request.user))
+            sessions = ScreeningSession.objects.filter(deleted=False, **_scope_sessions(request.user))
+            results  = ScreeningResult.objects.filter(deleted=False, **_scope_results(request.user))
 
             data = {
                 'total_sessions':    sessions.count(),

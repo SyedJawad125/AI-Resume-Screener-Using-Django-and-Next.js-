@@ -1,6 +1,7 @@
 import uuid
 from django.db import models
 from django.contrib.auth import get_user_model
+from utils.reusable_classes import TimeUserStamps, TimeStamps  # ← same as jobs app
 
 User = get_user_model()
 
@@ -20,32 +21,32 @@ class CandidateDecision(models.TextChoices):
     REJECTED    = 'rejected',    'Rejected'
 
 
-class ScreeningSession(models.Model):
-    """
-    One screening session = one JD screened against N resumes.
-    Spawns a ScreeningResult for each resume.
-    """
+# ─────────────────────────────────────────────────────────
+#  ScreeningSession
+#  Inherits TimeUserStamps → created_at, updated_at, deleted, created_by, updated_by
+# ─────────────────────────────────────────────────────────
+class ScreeningSession(TimeUserStamps):
     id           = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
-    job          = models.ForeignKey('jobs.JobDescription',  on_delete=models.CASCADE,   related_name='screening_sessions')
-    company      = models.ForeignKey('users.Company',        on_delete=models.CASCADE,   related_name='screening_sessions')
-    initiated_by = models.ForeignKey(User,                   on_delete=models.SET_NULL,  null=True,  related_name='initiated_screenings')
+    job          = models.ForeignKey('jobs.JobDescription', on_delete=models.CASCADE,  related_name='screening_sessions')
+    company      = models.ForeignKey('users.Company',       on_delete=models.CASCADE,  related_name='screening_sessions')
+    initiated_by = models.ForeignKey(User,                  on_delete=models.SET_NULL, null=True, related_name='initiated_screenings')
 
-    # Progress
-    status           = models.CharField(max_length=20, choices=ScreeningStatus.choices, default=ScreeningStatus.PENDING)
-    total_resumes    = models.PositiveIntegerField(default=0)
-    processed_count  = models.PositiveIntegerField(default=0)
-    failed_count     = models.PositiveIntegerField(default=0)
-    task_id          = models.CharField(max_length=255, blank=True)
+    # ── Progress ────────────────────────────────────────
+    status          = models.CharField(max_length=20, choices=ScreeningStatus.choices, default=ScreeningStatus.PENDING, db_index=True)
+    total_resumes   = models.PositiveIntegerField(default=0)
+    processed_count = models.PositiveIntegerField(default=0)
+    failed_count    = models.PositiveIntegerField(default=0)
+    task_id         = models.CharField(max_length=255, blank=True)
 
-    # Config
-    pass_threshold    = models.FloatField(default=70.0)   # Score above which = pass
-    top_n_candidates  = models.PositiveIntegerField(default=10)
+    # ── Config ──────────────────────────────────────────
+    pass_threshold   = models.FloatField(default=70.0)
+    top_n_candidates = models.PositiveIntegerField(default=10)
 
-    # Cost tracking
+    # ── Cost tracking ───────────────────────────────────
     total_tokens_used = models.PositiveIntegerField(default=0)
     total_cost_usd    = models.DecimalField(max_digits=10, decimal_places=6, default=0)
 
-    created_at   = models.DateTimeField(auto_now_add=True)
+    # ── Timestamps (created_at / updated_at from TimeUserStamps) ─
     started_at   = models.DateTimeField(null=True, blank=True)
     completed_at = models.DateTimeField(null=True, blank=True)
 
@@ -55,6 +56,7 @@ class ScreeningSession(models.Model):
         indexes  = [
             models.Index(fields=['job', 'status']),
             models.Index(fields=['company', 'status']),
+            models.Index(fields=['deleted']),
         ]
 
     def __str__(self):
@@ -72,24 +74,30 @@ class ScreeningSession(models.Model):
             return round((self.completed_at - self.started_at).total_seconds(), 1)
         return None
 
+    def soft_delete(self, user=None):
+        """Soft-delete a session — mirrors JobDescription.soft_delete()"""
+        self.deleted    = True
+        self.updated_by = user
+        self.save(update_fields=['deleted', 'updated_by', 'updated_at'])
 
-class ScreeningResult(models.Model):
-    """
-    The AI-generated evaluation of one resume against one JD.
-    Created as PENDING, updated to COMPLETED once the agent pipeline runs.
-    """
+
+# ─────────────────────────────────────────────────────────
+#  ScreeningResult
+#  Inherits TimeStamps → created_at, updated_at, deleted
+# ─────────────────────────────────────────────────────────
+class ScreeningResult(TimeStamps):
     id      = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
-    session = models.ForeignKey(ScreeningSession,         on_delete=models.CASCADE, related_name='results')
-    resume  = models.ForeignKey('resumes.Resume',          on_delete=models.CASCADE, related_name='screening_results')
-    job     = models.ForeignKey('jobs.JobDescription',     on_delete=models.CASCADE, related_name='screening_results')
+    session = models.ForeignKey(ScreeningSession,     on_delete=models.CASCADE, related_name='results')
+    resume  = models.ForeignKey('resumes.Resume',      on_delete=models.CASCADE, related_name='screening_results')
+    job     = models.ForeignKey('jobs.JobDescription', on_delete=models.CASCADE, related_name='screening_results')
 
     # ── Scores (0–100) ──────────────────────────────────
     overall_score       = models.FloatField(default=0)
     skill_score         = models.FloatField(default=0)
     experience_score    = models.FloatField(default=0)
     education_score     = models.FloatField(default=0)
-    fit_score           = models.FloatField(default=0)       # RAG + rule-based overall fit
-    semantic_similarity = models.FloatField(default=0)       # raw cosine sim from ChromaDB
+    fit_score           = models.FloatField(default=0)
+    semantic_similarity = models.FloatField(default=0)
 
     # ── Skill Breakdown ─────────────────────────────────
     matched_skills       = models.JSONField(default=list, blank=True)
@@ -97,16 +105,16 @@ class ScreeningResult(models.Model):
     bonus_skills         = models.JSONField(default=list, blank=True)
     must_have_skills_met = models.BooleanField(default=False)
 
-    # ── Experience Breakdown ─────────────────────────────
-    years_of_experience      = models.FloatField(default=0)
-    experience_gap_years     = models.FloatField(default=0)
-    relevant_experience_pct  = models.FloatField(default=0)
+    # ── Experience ──────────────────────────────────────
+    years_of_experience     = models.FloatField(default=0)
+    experience_gap_years    = models.FloatField(default=0)
+    relevant_experience_pct = models.FloatField(default=0)
 
-    # ── Education Breakdown ──────────────────────────────
+    # ── Education ───────────────────────────────────────
     education_match = models.BooleanField(default=False)
     education_level = models.CharField(max_length=30, blank=True)
 
-    # ── AI Explanation (LLM output) ─────────────────────
+    # ── AI Explanation ──────────────────────────────────
     strengths           = models.JSONField(default=list, blank=True)
     weaknesses          = models.JSONField(default=list, blank=True)
     explanation         = models.TextField(blank=True)
@@ -126,14 +134,11 @@ class ScreeningResult(models.Model):
     rank = models.PositiveIntegerField(null=True, blank=True)
 
     # ── Pipeline Meta ───────────────────────────────────
-    status             = models.CharField(max_length=20, choices=ScreeningStatus.choices, default=ScreeningStatus.PENDING)
+    status             = models.CharField(max_length=20, choices=ScreeningStatus.choices, default=ScreeningStatus.PENDING, db_index=True)
     model_used         = models.CharField(max_length=100, blank=True)
     tokens_used        = models.PositiveIntegerField(default=0)
     processing_time_ms = models.PositiveIntegerField(default=0)
     error_message      = models.TextField(blank=True)
-
-    created_at = models.DateTimeField(auto_now_add=True)
-    updated_at = models.DateTimeField(auto_now=True)
 
     class Meta:
         db_table        = 'screening_results'
@@ -143,6 +148,7 @@ class ScreeningResult(models.Model):
             models.Index(fields=['session', 'overall_score']),
             models.Index(fields=['job', 'overall_score']),
             models.Index(fields=['ai_decision']),
+            models.Index(fields=['deleted']),
         ]
 
     def __str__(self):
@@ -164,8 +170,11 @@ class ScreeningResult(models.Model):
         }
 
 
-class AgentExecutionLog(models.Model):
-    """Detailed log of each agent step — useful for debugging and transparency."""
+# ─────────────────────────────────────────────────────────
+#  AgentExecutionLog
+#  Inherits TimeStamps → created_at, updated_at, deleted
+# ─────────────────────────────────────────────────────────
+class AgentExecutionLog(TimeStamps):
     AGENT_CHOICES = [
         ('resume_parser',     'Resume Parser Agent'),
         ('jd_analyzer',       'JD Analyzer Agent'),
@@ -176,6 +185,7 @@ class AgentExecutionLog(models.Model):
         ('explanation',       'Explanation Agent'),
         ('orchestrator',      'Orchestrator'),
     ]
+
     id               = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     screening_result = models.ForeignKey(ScreeningResult,  on_delete=models.CASCADE, null=True, blank=True, related_name='agent_logs')
     session          = models.ForeignKey(ScreeningSession, on_delete=models.CASCADE, null=True, blank=True, related_name='agent_logs')
@@ -183,12 +193,11 @@ class AgentExecutionLog(models.Model):
     agent_version    = models.CharField(max_length=10, default='1.0')
     input_summary    = models.JSONField(default=dict, blank=True)
     output_summary   = models.JSONField(default=dict, blank=True)
-    status           = models.CharField(max_length=20)           # success | error | warning
+    status           = models.CharField(max_length=20)
     error_message    = models.TextField(blank=True)
     tokens_used      = models.PositiveIntegerField(default=0)
     processing_time_ms = models.PositiveIntegerField(default=0)
     model_used       = models.CharField(max_length=100, blank=True)
-    created_at       = models.DateTimeField(auto_now_add=True)
 
     class Meta:
         db_table = 'agent_execution_logs'
