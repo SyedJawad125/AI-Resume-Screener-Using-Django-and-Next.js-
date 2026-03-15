@@ -14,5 +14,5 @@ app.autodiscover_tasks([
     'apps.jobs',
     'apps.resumes',
     'apps.screening',
-    'core',           # ← This discovers core/tasks.py
+    # 'core',           # ← This discovers core/tasks.py
 ])

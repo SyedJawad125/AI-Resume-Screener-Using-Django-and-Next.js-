@@ -192,6 +192,61 @@
 
 
 
+# # ── Stage: runtime ────────────────────────────────────────────────
+# FROM python:3.12-slim AS runtime
+
+# # ── 1) Environment variables ───────────────────────────────────────
+# ENV PYTHONDONTWRITEBYTECODE=1 \
+#     PYTHONUNBUFFERED=1 \
+#     PIP_NO_CACHE_DIR=1
+
+# # ── 2) OS-level packages ───────────────────────────────────────────
+# RUN apt-get update && apt-get install -y --no-install-recommends \
+#     build-essential \
+#     libpq-dev \
+#     curl \
+#     netcat-openbsd \
+#     libmagic1 \
+#     poppler-utils \
+#     libgl1 \
+#     dos2unix \
+#   && rm -rf /var/lib/apt/lists/*
+
+# # ── 3) Non-root user ───────────────────────────────────────────────
+# RUN useradd -m appuser
+
+# # ── 4) Working directory ───────────────────────────────────────────
+# WORKDIR /app
+
+# # ── 5) Python dependencies ─────────────────────────────────────────
+# COPY requirements.txt /app/requirements.txt
+# RUN pip install --upgrade pip && pip install -r requirements.txt
+
+# # ── 6) Copy application source ─────────────────────────────────────
+# COPY . /app
+
+# # ── 7) Create runtime directories ─────────────────────────────────
+# RUN mkdir -p /app/chroma_db /app/media /app/static
+
+# # ── 8) Entrypoint: strip Windows CRLF + set permissions ───────────
+# COPY entrypoint.sh /entrypoint.sh
+# RUN dos2unix /entrypoint.sh \
+#     && chmod +x /entrypoint.sh \
+#     && chown -R appuser:appuser /app \
+#     && chown appuser:appuser /entrypoint.sh
+
+# # ── 9) Drop to non-root ────────────────────────────────────────────
+# USER appuser
+
+# # ── 10) Expose Django port ─────────────────────────────────────────
+# EXPOSE 8000
+
+# # ── 11) Default start-up ──────────────────────────────────────────
+# ENTRYPOINT ["/entrypoint.sh"]
+# CMD ["gunicorn", "--bind", "0.0.0.0:8000", "--workers", "3", "--timeout", "120", "config.wsgi:application"]
+
+
+
 # ── Stage: runtime ────────────────────────────────────────────────
 FROM python:3.12-slim AS runtime
 
@@ -209,7 +264,6 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libmagic1 \
     poppler-utils \
     libgl1 \
-    dos2unix \
   && rm -rf /var/lib/apt/lists/*
 
 # ── 3) Non-root user ───────────────────────────────────────────────
@@ -228,9 +282,9 @@ COPY . /app
 # ── 7) Create runtime directories ─────────────────────────────────
 RUN mkdir -p /app/chroma_db /app/media /app/static
 
-# ── 8) Entrypoint: strip Windows CRLF + set permissions ───────────
-COPY entrypoint.sh /entrypoint.sh
-RUN dos2unix /entrypoint.sh \
+# ── 8) Write entrypoint.sh DIRECTLY inside the image ──────────────
+#   This bypasses Windows CRLF entirely — no file copy from host
+RUN printf '#!/bin/sh\nset -e\n\nwait_for_service() {\n    host=$1\n    port=$2\n    name=$3\n    echo "Waiting for $name at $host:$port..."\n    while ! nc -z "$host" "$port"; do\n        echo "  $name unavailable - retrying in 5s"\n        sleep 5\n    done\n    echo "$name is up!"\n}\n\nFIRST_ARG="${1:-}"\n\nwait_for_service db 5432 "PostgreSQL"\n\ncase "$FIRST_ARG" in\n    gunicorn|celery)\n        wait_for_service rabbitmq 5672 "RabbitMQ"\n        ;;\nesac\n\nif [ "$FIRST_ARG" = "gunicorn" ]; then\n    echo "Running migrations..."\n    python manage.py migrate --noinput\n    echo "Collecting static files..."\n    python manage.py collectstatic --noinput\n    mkdir -p /app/chroma_db\n    [ -f script_permissions.py ] && python script_permissions.py\n    [ -f script_populate.py ] && python script_populate.py\nfi\n\nif [ "$FIRST_ARG" = "python" ] && [ "${2:-}" = "manage.py" ] && [ "${3:-}" = "runserver" ]; then\n    echo "Running migrations (runserver)..."\n    python manage.py migrate --noinput\n    mkdir -p /app/chroma_db\nfi\n\necho "Starting: $@"\nexec "$@"\n' > /entrypoint.sh \
     && chmod +x /entrypoint.sh \
     && chown -R appuser:appuser /app \
     && chown appuser:appuser /entrypoint.sh
