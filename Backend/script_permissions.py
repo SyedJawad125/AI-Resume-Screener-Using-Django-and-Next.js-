@@ -31,6 +31,12 @@ permissions = [
     Permission(name='Delete User',     code_name='delete_user',     module_name='User', module_label='User Management', description='User can delete user'),
     Permission(name='Deactivate User', code_name='toggle_user',     module_name='User', module_label='User Management', description='User can deactivate user'),
 
+    # ---------- COMPANY ----------
+    Permission(name='Create Company', code_name='create_company', module_name='Company', module_label='Company Management', description='User can create Company'),
+    Permission(name='Read Company',   code_name='read_company',   module_name='Company', module_label='Company Management', description='User can read Company'),
+    Permission(name='Update Company', code_name='update_company', module_name='Company', module_label='Company Management', description='User can update Company'),
+    Permission(name='Delete Company', code_name='delete_company', module_name='Company', module_label='Company Management', description='User can delete Company'),
+
     # ---------- CATEGORY ----------
     Permission(name='Create Category', code_name='create_category', module_name='Category', module_label='Blog Management', description='User can create category'),
     Permission(name='Read Category',   code_name='read_category',   module_name='Category', module_label='Blog Management', description='User can read category'),

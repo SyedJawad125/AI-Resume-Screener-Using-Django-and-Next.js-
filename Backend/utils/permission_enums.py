@@ -127,3 +127,12 @@ COMPARE_SCREENING   = 'compare_screening'   # POST /screening/v1/compare/
 ANALYTICS_SCREENING = 'analytics_screening' # GET  /screening/v1/analytics/
 STATS_SCREENING     = 'stats_screening'     # GET  /screening/v1/stats/
 SHOW_ALL_SCREENINGS = 'show_all_screenings' # bypass initiated_by scope filter (manager/admin role)
+
+
+
+
+# Company
+CREATE_COMPANY = 'create_company'
+READ_COMPANY   = 'read_company'
+UPDATE_COMPANY = 'update_company'
+DELETE_COMPANY = 'delete_company'

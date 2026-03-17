@@ -52,6 +52,14 @@ const AdminSideNavbarCom = () => {
       color: 'emerald'
     },
     {
+      id: 'company',
+      label: 'Comapny',
+      icon: Shield,
+      path: '/company',
+      roles: ['admin', 'super'],
+      color: 'red'
+    },
+    {
       id: 'images',
       label: 'Images',
       icon: Image,
