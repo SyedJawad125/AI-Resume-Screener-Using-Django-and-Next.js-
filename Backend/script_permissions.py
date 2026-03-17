@@ -15,6 +15,13 @@ permissions = [
     Permission(name='Read Role',       code_name='read_role',       module_name='Role', module_label='User Management', description='User can read role'),
     Permission(name='Update Role',     code_name='update_role',     module_name='Role', module_label='User Management', description='User can update role'),
     Permission(name='Delete Role',     code_name='delete_role',     module_name='Role', module_label='User Management', description='User can delete role'),
+    
+    # ---------- PERMISSION -----
+    Permission(name='Show Permission', code_name='show_permission', module_name='Permission', module_label='User Permission', description='User can see Permission'),
+    Permission(name='Create Permission', code_name='create_permission', module_name='Permission', module_label='User Permission', description='User can create Permission'),
+    Permission(name='Read Permission', code_name='read_permission', module_name='Permission', module_label='User Permission', description='User can read Permission'),
+    Permission(name='Update Permission', code_name='update_permission', module_name='Permission', module_label='User Permission', description='User can update Permission'),
+    Permission(name='Delete Permission', code_name='delete_permission', module_name='Permission', module_label='User Permission', description='User can delete Permission'),
 
     # ---------- USER ----------
     Permission(name='Show User',       code_name='show_user',       module_name='User', module_label='User Management', description='User can see user'),
