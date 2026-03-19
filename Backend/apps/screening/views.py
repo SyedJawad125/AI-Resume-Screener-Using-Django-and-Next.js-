@@ -472,7 +472,7 @@ from utils.response_messages import SUCCESSFUL, NOT_FOUND, ID_NOT_PROVIDED
 from utils.decorator import permission_required
 from utils.permission_enums import *
 
-from .models import ScreeningSession, ScreeningResult, AgentExecutionLog, ScreeningStatus
+from .models import CandidateDecision, ScreeningSession, ScreeningResult, AgentExecutionLog, ScreeningStatus
 from .serializers import (
     StartScreeningSerializer,
     ScreeningSessionListSerializer,

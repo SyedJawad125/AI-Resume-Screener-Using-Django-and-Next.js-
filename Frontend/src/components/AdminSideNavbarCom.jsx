@@ -68,6 +68,22 @@ const AdminSideNavbarCom = () => {
       color: 'red'
     },
     {
+      id: 'resume',
+      label: 'Resume',
+      icon: Shield,
+      path: '/resume',
+      roles: ['admin', 'super'],
+      color: 'emerald'
+    },
+    {
+      id: 'screening',
+      label: 'Screening',
+      icon: Shield,
+      path: '/screening',
+      roles: ['admin', 'super'],
+      color: 'emerald'
+    },
+    {
       id: 'images',
       label: 'Images',
       icon: Image,
